@@ -16,7 +16,7 @@ const rng = createRng(SEED);
 
 export const schedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, rng);
 
-const { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, results } = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
+const { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, results } = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
 export { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, results };
 
 export function getTeamRecord(teamId) {
@@ -57,4 +57,21 @@ export function getPlayerFatiguePenalty(playerId) {
 // distinction once a streak resets.
 export function getPlayerStreakState(playerId) {
   return streakStateById.get(playerId) ?? null;
+}
+
+// Current manager as of the end of the simulated season — managers.md's
+// Career Lifecycle (Firing & Rehiring, engine/managerFiring.js) can change
+// a team's assignment mid-season, so this is NOT the same as realLeague.js's
+// static getTeamManager(). Falls back to the static assignment (should
+// never actually be needed, since every team is pre-seeded in
+// simulateSeason, but matches this codebase's existing graceful-fallback
+// convention elsewhere).
+export function getCurrentTeamManager(teamId) {
+  return managerAssignmentById.get(teamId) ?? getTeamManager(teamId);
+}
+
+// Every in-season Firing & Rehiring event for a team, oldest first — empty
+// if the team's manager was never fired this season (the common case).
+export function getTeamManagerChanges(teamId) {
+  return firings.filter((f) => f.teamId === teamId);
 }

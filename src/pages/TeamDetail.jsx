@@ -1,8 +1,8 @@
 import { useParams, Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams, getTeamRoster, getTeamManager } from '../data/realLeague';
-import { getTeamRecord, getTeamResults, getPlayerInjuryStatus, getPlayerFatigueStatus, getPlayerFatiguePenalty, getPlayerStreakState } from '../data/season';
+import { teams, getTeamRoster } from '../data/realLeague';
+import { getTeamRecord, getTeamResults, getPlayerInjuryStatus, getPlayerFatigueStatus, getPlayerFatiguePenalty, getPlayerStreakState, getCurrentTeamManager, getTeamManagerChanges } from '../data/season';
 import { getAge } from '../models/Player';
 import { getManagerAge } from '../models/Manager';
 import { HOT_COLD_TIERS, MANAGER_SLIDER_NAMES, MANAGER_ORIGINS } from '../models/constants';
@@ -257,7 +257,14 @@ function ManagerAttributeTile({ label, value }) {
   );
 }
 
-function ManagerCard({ manager }) {
+// managers.md's Career Lifecycle (Firing & Rehiring, engine/managerFiring.js)
+// — `changes` is data/season.js's getTeamManagerChanges(), empty for the
+// common case (a team whose manager was never fired this simulated season).
+function formatWinPct(pct) {
+  return `.${String(Math.round(pct * 1000)).padStart(3, '0')}`;
+}
+
+function ManagerCard({ manager, changes = [] }) {
   if (!manager) return null;
   return (
     <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
@@ -279,6 +286,16 @@ function ManagerCard({ manager }) {
         <ManagerAttributeTile label="Temperament" value={manager.temperament} />
         <ManagerAttributeTile label="Streak Read" value={manager.streakRead} />
       </div>
+      {changes.length > 0 && (
+        <div className="px-4 py-2 border-t border-field-line">
+          <div className="text-[10px] uppercase tracking-wider text-ledger/35 mb-1">Manager Changes</div>
+          {changes.map((change) => (
+            <div key={change.gameNumber} className="text-xs text-ledger/60">
+              Fired after game {change.gameNumber} ({formatWinPct(change.winPctAtFiring)})
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -298,7 +315,8 @@ export default function TeamDetail() {
 
   const roster = getTeamRoster(team.id);
   const record = getTeamRecord(team.id);
-  const manager = getTeamManager(team.id);
+  const manager = getCurrentTeamManager(team.id);
+  const managerChanges = getTeamManagerChanges(team.id);
   const teamsById = new Map(teams.map((t) => [t.id, t]));
 
   return (
@@ -324,7 +342,7 @@ export default function TeamDetail() {
       </div>
 
       <div className="grid grid-cols-1 gap-4">
-        <ManagerCard manager={manager} />
+        <ManagerCard manager={manager} changes={managerChanges} />
         <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} />
         <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} />
         <SeasonResultsTable teamId={team.id} teamsById={teamsById} />

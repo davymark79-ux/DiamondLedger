@@ -17,9 +17,10 @@ import { computeBuntAttemptProbability } from '../src/engine/bunting.js';
 import { isNoDoublesActive, isInfieldInActive } from '../src/engine/fielding.js';
 import { selectPinchHitter } from '../src/engine/hitterChanges.js';
 import { computeManagerRetirementProbability, rollManagerRetirement } from '../src/engine/retirement.js';
+import { computeWinPct, computeFiringProbability, rollFiring, updateOwnerPatience, HONEYMOON_PATIENCE, OWNER_PATIENCE_NEUTRAL } from '../src/engine/managerFiring.js';
 import { simulateGame } from '../src/engine/game.js';
 import { teams, getTeamRoster, getTeamManager } from '../src/data/realLeague.js';
-import { buildSeasonSchedule, simulateSeason } from '../src/engine/season.js';
+import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM } from '../src/engine/season.js';
 
 let failures = 0;
 function assert(condition, message) {
@@ -286,6 +287,91 @@ console.log('\n=== 13. Wired into a real simulated season ===\n');
   );
   const allLinesFinite = [...box.away.battingLines, ...box.home.battingLines].every((line) => Number.isFinite(line.pa) && Number.isFinite(line.ab));
   assert(allLinesFinite, 'a single game with explicit real managerProfiles produces finite box-score lines throughout');
+}
+
+console.log('\n=== 14. computeWinPct ===\n');
+{
+  assert(computeWinPct(0, 0) === 0, 'no games played reads as 0, not NaN');
+  assert(computeWinPct(10, 0) === 1, '10-0 is a 1.000 win pct');
+  assert(computeWinPct(1, 1) === 0.5, '1-1 is a .500 win pct');
+}
+
+console.log('\n=== 15. computeFiringProbability — win% + owner patience direction ===\n');
+{
+  assert(computeFiringProbability(0.3, 5, OWNER_PATIENCE_NEUTRAL) === 0, 'below the games-under-manager gate, probability is 0 regardless of how bad the record is');
+  assert(computeFiringProbability(0.5, 50, OWNER_PATIENCE_NEUTRAL) === 0, 'at exactly .500, probability is 0 — no team fires a .500-or-better manager under this model');
+  assert(computeFiringProbability(0.7, 50, OWNER_PATIENCE_NEUTRAL) === 0, 'above .500, probability is 0');
+
+  const patientProbability = computeFiringProbability(0.3, 50, 90);
+  const impatientProbability = computeFiringProbability(0.3, 50, 10);
+  console.log(`  same .300 record, 50 games in — patient owner (90): ${patientProbability.toFixed(4)}, impatient owner (10): ${impatientProbability.toFixed(4)}`);
+  assert(impatientProbability > patientProbability, 'a low-patience owner fires a bad manager sooner than a patient one, holding the record fixed');
+
+  const worseRecordProbability = computeFiringProbability(0.2, 50, OWNER_PATIENCE_NEUTRAL);
+  const betterRecordProbability = computeFiringProbability(0.45, 50, OWNER_PATIENCE_NEUTRAL);
+  assert(worseRecordProbability > betterRecordProbability, 'a worse win% raises firing probability, holding patience fixed');
+
+  const forcedFire = rollFiring(0.2, 50, 10, () => 0);
+  const gatedNoFire = rollFiring(0.2, 5, 10, () => 0);
+  assert(forcedFire === true, 'rollFiring fires when rng() undercuts a positive probability');
+  assert(gatedNoFire === false, 'rollFiring never fires below the games-under-manager gate, even against a forced roll');
+}
+
+console.log('\n=== 16. updateOwnerPatience ===\n');
+{
+  const afterWin = updateOwnerPatience(OWNER_PATIENCE_NEUTRAL, true);
+  const afterLoss = updateOwnerPatience(OWNER_PATIENCE_NEUTRAL, false);
+  assert(afterWin > OWNER_PATIENCE_NEUTRAL, 'a win raises owner patience');
+  assert(afterLoss < OWNER_PATIENCE_NEUTRAL, 'a loss lowers owner patience');
+  assert(OWNER_PATIENCE_NEUTRAL - afterLoss > afterWin - OWNER_PATIENCE_NEUTRAL, 'a loss drains patience faster than a win restores it (asymmetric, "impatient faster than grateful")');
+  assert(updateOwnerPatience(1, false) >= 0, 'patience never drops below 0');
+  assert(updateOwnerPatience(99, true) <= 100, 'patience never exceeds 100');
+}
+
+console.log('\n=== 17. Wired into a real simulated season: Firing & Rehiring ===\n');
+{
+  const rng = createRng(777);
+  const fullSchedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, rng);
+  const { firings, managerAssignmentById } = simulateSeason(teams, getTeamRoster, fullSchedule, rng, getTeamManager);
+
+  console.log(`  ${firings.length} firing(s) league-wide over a full ${TARGET_GAMES_PER_TEAM}-game season across ${teams.length} teams`);
+  assert(firings.length > 0, 'at least one manager gets fired somewhere in the league over a full season (a real, exercised code path, not just theoretically reachable)');
+  assert(firings.every((f) => f.hiredManagerId !== f.firedManagerId), 'no team ever "rehires" the exact manager it just fired in the same event');
+
+  // Deterministic, not just probable: the pool starts empty, so firing #1
+  // always generates fresh (nothing to reuse yet) — but every firing from
+  // #2 onward finds a non-empty pool (firing #1's manager, at minimum) and
+  // must pull from it before generating fresh. So if 2+ firings happened
+  // league-wide, at least one hire is guaranteed to be a real pool reuse.
+  const firedIds = new Set(firings.map((f) => f.firedManagerId));
+  const poolReuseHappened = firings.some((f) => firedIds.has(f.hiredManagerId));
+  assert(
+    firings.length < 2 || poolReuseHappened,
+    'once 2+ firings happen league-wide, at least one hire pulls a previously-fired manager from the pool (the real "career ladder" the doc wants) instead of generating a fresh one'
+  );
+
+  assert(
+    [...managerAssignmentById.values()].every((m) => m && typeof m.id === 'string'),
+    'every team has a real, defined manager assignment at the end of the season (never left null/undefined after a firing)'
+  );
+  assert(HONEYMOON_PATIENCE > OWNER_PATIENCE_NEUTRAL && HONEYMOON_PATIENCE < 100, 'HONEYMOON_PATIENCE is a real optimistic-but-not-maxed value above neutral, not a boundary/no-op');
+}
+
+console.log('\n=== 18. getCurrentTeamManager / getTeamManagerChanges wiring shape ===\n');
+{
+  // data/season.js computes its own module-load singleton season, so this
+  // section confirms the shape/contract via a fresh, script-local season
+  // simulation rather than importing data/season.js directly (which would
+  // require the full app's real-league singleton and isn't otherwise
+  // needed by this script).
+  const rng = createRng(888);
+  const smallSchedule = buildSeasonSchedule(teams, 30, rng);
+  const { managerAssignmentById, firings } = simulateSeason(teams, getTeamRoster, smallSchedule, rng, getTeamManager);
+  const sampleTeamId = teams[0].id;
+  const currentManager = managerAssignmentById.get(sampleTeamId) ?? getTeamManager(sampleTeamId);
+  assert(Boolean(currentManager), 'a getCurrentTeamManager-style lookup (season assignment, falling back to the static one) always resolves to a real manager');
+  const teamChanges = firings.filter((f) => f.teamId === sampleTeamId);
+  assert(Array.isArray(teamChanges), 'a getTeamManagerChanges-style filter always returns an array, even when empty');
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

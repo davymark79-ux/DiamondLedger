@@ -16,7 +16,9 @@ import { computePitcherDecisions } from './pitcherDecisions.js';
 import { maybeEscalateInjury } from './injuries.js';
 import { updateStreakState } from './hotColdStreaks.js';
 import { rollRest } from './positionPlayerFatigue.js';
+import { computeWinPct, updateOwnerPatience, rollFiring, HONEYMOON_PATIENCE, OWNER_PATIENCE_NEUTRAL } from './managerFiring.js';
 import { createManager } from '../models/Manager.js';
+import { generateManager } from '../models/generation/managerGenerator.js';
 import { LEAGUES } from '../models/constants.js';
 
 export const TARGET_GAMES_PER_TEAM = 150;
@@ -269,6 +271,62 @@ function advanceStreakState(battingLines, streakAccumulatorById, streakStateById
   }
 }
 
+// managers.md's Career Lifecycle — Firing & Rehiring (engine/managerFiring.js).
+// Checked once per team per game, right after that game's standings update.
+// Only active when the team has a REAL manager assigned — a team running on
+// the neutral synthetic default (no real manager was ever supplied to
+// simulateSeason via getTeamManager) is never fired/hired, and no tenure/
+// patience is tracked for it either, matching today's exact behavior for
+// every existing caller that doesn't pass getTeamManager (every validate
+// script). Production (data/season.js) DOES pass a real getTeamManager for
+// all 50 teams, so this is fully live there.
+function maybeFireAndRehireManager(
+  teamId,
+  team,
+  won,
+  managerAssignmentById,
+  tenureRecordById,
+  ownerPatienceById,
+  availableManagerPool,
+  firings,
+  gameNumber,
+  rng
+) {
+  const currentManager = managerAssignmentById.get(teamId);
+  if (!currentManager) return;
+
+  // Tenure is under the CURRENT manager, not the team's whole season — a
+  // new hire gets a clean evaluation window, not blamed for his
+  // predecessor's record (see managerFiring.js's header).
+  const tenure = tenureRecordById.get(teamId) ?? { wins: 0, losses: 0 };
+  if (won) tenure.wins += 1;
+  else tenure.losses += 1;
+  tenureRecordById.set(teamId, tenure);
+
+  const patience = updateOwnerPatience(ownerPatienceById.get(teamId) ?? OWNER_PATIENCE_NEUTRAL, won);
+  ownerPatienceById.set(teamId, patience);
+
+  const gamesUnderManager = tenure.wins + tenure.losses;
+  const winPct = computeWinPct(tenure.wins, tenure.losses);
+  if (!rollFiring(winPct, gamesUnderManager, patience, rng)) return;
+
+  // Fired — the real "career ladder" managers.md wants: pull the next
+  // available manager from the labor-market pool (another club's earlier
+  // firing) before generating a brand-new one. currentManager is pushed
+  // into the pool only AFTER this pick, so he can't rehire himself in the
+  // same event.
+  const hired = availableManagerPool.length > 0
+    ? availableManagerPool.shift()
+    : generateManager({ rng, leagueId: team.leagueId, overrides: { id: `${teamId}-hire-${gameNumber}`, teamId } });
+  availableManagerPool.push({ ...currentManager, teamId: null });
+
+  managerAssignmentById.set(teamId, { ...hired, teamId });
+  tenureRecordById.set(teamId, { wins: 0, losses: 0 });
+  ownerPatienceById.set(teamId, HONEYMOON_PATIENCE); // a real honeymoon for the new hire, not a blank slate
+
+  firings.push({ gameNumber, teamId, firedManagerId: currentManager.id, hiredManagerId: hired.id, winPctAtFiring: winPct });
+}
+
 /**
  * @param {object[]} teams - from realLeague.js
  * @param {(teamId: string) => object} getTeamRoster - from realLeague.js
@@ -276,12 +334,15 @@ function advanceStreakState(battingLines, streakAccumulatorById, streakStateById
  * @param {() => number} rng
  * @param {(teamId: string) => object|null} [getTeamManager] - from realLeague.js's
  *   getTeamManager; defaults to no manager (createSide's own neutral-synthetic-manager
- *   default applies), so existing callers that don't pass this see identical behavior.
+ *   default applies), so existing callers that don't pass this see identical behavior,
+ *   including no Firing/Rehiring activity at all (see maybeFireAndRehireManager above).
  * @returns {{
  *   standingsById: Map<string, {wins: number, losses: number}>,
  *   injuryStatusById: Map<string, {type: string, severity: string, gamesRemaining: number, sustainedGameNumber: number}>,
  *   consecutiveGamesPlayedById: Map<string, number>,
  *   streakStateById: Map<string, {baselineCompositeValue: number, recentCompositeValue: number|null, standardDeviationsFromBaseline: number, tier: string}>,
+ *   managerAssignmentById: Map<string, object|null> - the CURRENT manager per team, post any in-season firings/rehires,
+ *   firings: {gameNumber: number, teamId: string, firedManagerId: string, hiredManagerId: string, winPctAtFiring: number}[],
  *   results: {gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
  *     winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]
  * }}
@@ -296,8 +357,19 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
   const streakStateById = new Map();
   const results = [];
 
+  // Pre-seeded once — the ONLY thing every per-game manager lookup reads
+  // from here on (not getTeamManager directly), since a firing can change
+  // a team's assignment mid-loop. Stays null for a team getTeamManager
+  // never supplied one for (see maybeFireAndRehireManager above).
+  const managerAssignmentById = new Map(teams.map((team) => [team.id, getTeamManager(team.id) ?? null]));
+  const tenureRecordById = new Map();
+  const ownerPatienceById = new Map();
+  const availableManagerPool = [];
+  const firings = [];
+
   for (const game of schedule) {
     const awayTeam = teamsById.get(game.awayTeamId);
+    const homeTeam = teamsById.get(game.homeTeamId);
     const dhRule = LEAGUES[awayTeam.leagueId].dhRule; // same league for both sides, guaranteed by grouping
 
     const awayFullRoster = getTeamRoster(game.awayTeamId);
@@ -305,13 +377,12 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     advanceInjuriesForTeam(awayFullRoster, injuryStatusById, rng);
     advanceInjuriesForTeam(homeFullRoster, injuryStatusById, rng);
 
-    // `?? undefined` — a null manager (the default getTeamManager's return,
-    // or a team with no manager assigned) must become undefined, not null,
-    // to actually trigger buildGameSide/createSide's/resolveRestedRoster's
-    // default-param neutral manager (destructuring defaults only fire on
-    // undefined, not null).
-    const awayManager = getTeamManager(game.awayTeamId) ?? undefined;
-    const homeManager = getTeamManager(game.homeTeamId) ?? undefined;
+    // `?? undefined` — a null manager (no real one assigned) must become
+    // undefined, not null, to actually trigger buildGameSide/createSide's/
+    // resolveRestedRoster's default-param neutral manager (destructuring
+    // defaults only fire on undefined, not null).
+    const awayManager = managerAssignmentById.get(game.awayTeamId) ?? undefined;
+    const homeManager = managerAssignmentById.get(game.homeTeamId) ?? undefined;
 
     // Injuries first (mandatory), then auto-rest (a voluntary managerial
     // choice layered on top of the already-injury-resolved lineup) — see
@@ -351,13 +422,23 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
 
     const awayStanding = standingsById.get(game.awayTeamId);
     const homeStanding = standingsById.get(game.homeTeamId);
-    if (box.away.runs > box.home.runs) {
+    const awayWon = box.away.runs > box.home.runs;
+    if (awayWon) {
       awayStanding.wins++;
       homeStanding.losses++;
     } else {
       homeStanding.wins++;
       awayStanding.losses++;
     }
+
+    maybeFireAndRehireManager(
+      game.awayTeamId, awayTeam, awayWon,
+      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, game.gameNumber, rng
+    );
+    maybeFireAndRehireManager(
+      game.homeTeamId, homeTeam, !awayWon,
+      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, game.gameNumber, rng
+    );
 
     results.push({
       gameNumber: game.gameNumber,
@@ -372,5 +453,5 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     });
   }
 
-  return { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, results };
+  return { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, results };
 }
