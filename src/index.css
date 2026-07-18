@@ -1,0 +1,47 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@theme {
+  /* Ballpark ledger palette — deep field green shell, parchment ledger panels,
+     brass for promotion/positive, brick for relegation/negative. */
+  --color-field: #0F211A;
+  --color-field-dark: #081712;
+  --color-field-line: #2E4A3C;
+
+  --color-ledger: #ECE7D8;
+  --color-ledger-dim: #DFD9C6;
+  --color-ledger-line: #C9C1A8;
+
+  --color-ink: #1B2420;
+  --color-ink-soft: #52584F;
+  --color-ink-faint: #8A8B7C;
+
+  --color-brass: #B98F1E;
+  --color-brass-bright: #D6AC3B;
+  --color-brick: #9C3B34;
+  --color-brick-bright: #B85049;
+  --color-navy: #24425F;
+  --color-navy-bright: #33587E;
+
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-field);
+  color: var(--color-ledger);
+}
+
+/* Agate-style condensed number treatment for stat tables */
+.agate {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.display-face {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
