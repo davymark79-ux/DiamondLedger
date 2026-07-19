@@ -190,3 +190,8 @@ export const MANAGER_SLIDER_NAMES = Object.freeze([
 // engine/retirement.js never actually retires anyone in production) — see
 // models/Manager.js's header for how this simplification is handled.
 export const MANAGER_ORIGINS = Object.freeze({ EX_PLAYER: 'EX_PLAYER', OUTSIDER: 'OUTSIDER' });
+
+// writers-corps.md — the Hall of Fame voting electorate. The doc's own
+// "four personality sliders (1-100 each)" — reuses MANAGER_ATTRIBUTE_SCALE
+// directly, matching the doc's explicit scale choice.
+export const WRITER_SLIDER_NAMES = Object.freeze(['traditionalism', 'analytics', 'quirkinessContrarianism', 'homerism']);

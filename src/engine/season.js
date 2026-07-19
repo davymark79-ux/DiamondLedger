@@ -35,8 +35,10 @@ function shuffle(array, rng) {
 // The only grouping that ever plays itself — no interleague in the regular
 // season (league-structure.md: "Foundry clubs play Foundry clubs, Exchange
 // clubs play Exchange clubs, never each other"). Tier is included since
-// MLB1/MLB2 obviously don't play each other either.
-function groupTeamsForScheduling(teams) {
+// MLB1/MLB2 obviously don't play each other either. Exported — engine/
+// leagueProgression.js reuses this exact grouping to determine each
+// season's pennant winner (best regular-season record per group).
+export function groupTeamsForScheduling(teams) {
   const groups = new Map();
   for (const team of teams) {
     const key = `${team.tier}-${team.leagueId}`;
@@ -252,6 +254,55 @@ function advanceFatigueForTeam(fullRoster, resolvedRoster, dhRule, consecutiveGa
   }
 }
 
+// Season-total stat accumulation (awards-and-hall-of-fame.md's Hall case
+// score needs career totals; this is the foundational layer — nothing in
+// this engine had ever summed a single season's box-score lines before,
+// let alone a career's). Reuses boxScore.js's own field names directly
+// rather than inventing a parallel shape. `seasonBattingStatsById`/
+// `seasonPitchingStatsById` are keyed by player id, folded once per game;
+// engine/leagueProgression.js's simulateLeagueHistory is what rolls these
+// up further into real career totals across multiple simulated seasons.
+// Exported — engine/leagueProgression.js's career-stat folding reuses these
+// exact field lists/shapes rather than redefining them a third time (season
+// totals and career totals are structurally identical, just summed over
+// more games).
+export const BATTING_STAT_FIELDS = Object.freeze(['pa', 'ab', 'r', 'h', 'doubles', 'triples', 'hr', 'rbi', 'bb', 'hbp', 'k', 'gidp', 'sb', 'cs', 'sh']);
+export const PITCHING_STAT_FIELDS = Object.freeze(['battersFaced', 'outsRecorded', 'pitches', 'h', 'r', 'er', 'bb', 'hbp', 'k', 'hr']);
+
+export function emptySeasonBattingTotals() {
+  const totals = { risp: { ab: 0, h: 0 } };
+  for (const field of BATTING_STAT_FIELDS) totals[field] = 0;
+  return totals;
+}
+
+export function emptySeasonPitchingTotals() {
+  const totals = { wins: 0, losses: 0, saves: 0 };
+  for (const field of PITCHING_STAT_FIELDS) totals[field] = 0;
+  return totals;
+}
+
+function accumulateBattingStats(statsById, battingLines) {
+  for (const line of battingLines) {
+    if (line.pa <= 0) continue; // matches advanceStreakState's own "only visited players" gate
+    const totals = statsById.get(line.player.id) ?? emptySeasonBattingTotals();
+    for (const field of BATTING_STAT_FIELDS) totals[field] += line[field];
+    totals.risp.ab += line.risp.ab;
+    totals.risp.h += line.risp.h;
+    statsById.set(line.player.id, totals);
+  }
+}
+
+function accumulatePitchingStats(statsById, pitchingLines, decisions) {
+  for (const line of pitchingLines) {
+    const totals = statsById.get(line.player.id) ?? emptySeasonPitchingTotals();
+    for (const field of PITCHING_STAT_FIELDS) totals[field] += line[field];
+    if (decisions.winningPitcherId === line.player.id) totals.wins += 1;
+    if (decisions.losingPitcherId === line.player.id) totals.losses += 1;
+    if (decisions.savePitcherId === line.player.id) totals.saves += 1;
+    statsById.set(line.player.id, totals);
+  }
+}
+
 // Hot/Cold Streaks (engine/hotColdStreaks.js) cross-game bookkeeping —
 // called once per game for every batting line with at least one PA
 // (subs included, via their own partial-game line). `streakAccumulatorById`
@@ -343,6 +394,8 @@ function maybeFireAndRehireManager(
  *   streakStateById: Map<string, {baselineCompositeValue: number, recentCompositeValue: number|null, standardDeviationsFromBaseline: number, tier: string}>,
  *   managerAssignmentById: Map<string, object|null> - the CURRENT manager per team, post any in-season firings/rehires,
  *   firings: {gameNumber: number, teamId: string, firedManagerId: string, hiredManagerId: string, winPctAtFiring: number}[],
+ *   seasonBattingStatsById: Map<string, object> - summed boxScore.js battingLine fields across every game this player batted in,
+ *   seasonPitchingStatsById: Map<string, object> - summed pitchingLine fields plus wins/losses/saves across every game this pitcher appeared in,
  *   results: {gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
  *     winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]
  * }}
@@ -355,6 +408,8 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
   const consecutiveGamesPlayedById = new Map();
   const streakAccumulatorById = new Map();
   const streakStateById = new Map();
+  const seasonBattingStatsById = new Map();
+  const seasonPitchingStatsById = new Map();
   const results = [];
 
   // Pre-seeded once — the ONLY thing every per-game manager lookup reads
@@ -420,6 +475,11 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     advanceStreakState(box.away.battingLines, streakAccumulatorById, streakStateById);
     advanceStreakState(box.home.battingLines, streakAccumulatorById, streakStateById);
 
+    accumulateBattingStats(seasonBattingStatsById, box.away.battingLines);
+    accumulateBattingStats(seasonBattingStatsById, box.home.battingLines);
+    accumulatePitchingStats(seasonPitchingStatsById, box.away.pitchingLines, decisions);
+    accumulatePitchingStats(seasonPitchingStatsById, box.home.pitchingLines, decisions);
+
     const awayStanding = standingsById.get(game.awayTeamId);
     const homeStanding = standingsById.get(game.homeTeamId);
     const awayWon = box.away.runs > box.home.runs;
@@ -453,5 +513,8 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     });
   }
 
-  return { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, results };
+  return {
+    standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById,
+    managerAssignmentById, firings, seasonBattingStatsById, seasonPitchingStatsById, results,
+  };
 }

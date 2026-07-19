@@ -20,7 +20,8 @@
     "validate:bunt": "node scripts/validate-bunting.mjs",
     "validate:fielding": "node scripts/validate-fielding.mjs",
     "validate:origin": "node scripts/validate-origin-and-retirement.mjs",
-    "validate:managers": "node scripts/validate-manager-entity.mjs"
+    "validate:managers": "node scripts/validate-manager-entity.mjs",
+    "validate:hof": "node scripts/validate-hall-of-fame.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",
