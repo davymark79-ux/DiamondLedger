@@ -9,6 +9,7 @@ import Cup from './pages/Cup';
 import Financials from './pages/Financials';
 import Events from './pages/Events';
 import BoxScore from './pages/BoxScore';
+import HallOfFame from './pages/HallOfFame';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/financials" element={<Financials />} />
             <Route path="/events" element={<Events />} />
             <Route path="/box-score" element={<BoxScore />} />
+            <Route path="/hall-of-fame" element={<HallOfFame />} />
           </Routes>
         </main>
       </div>
