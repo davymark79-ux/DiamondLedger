@@ -1,6 +1,5 @@
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams } from '../data/realLeague';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { TIERS } from '../models/constants';
 
@@ -11,7 +10,7 @@ const WIRE_ITEMS_COUNT = 5;
 // ranking — Foundry and Exchange clubs never play each other in the regular
 // season (league-structure.md), so there's no real single "MLB1 leader" the
 // way a Standings.jsx table would produce one.
-function bestRecordInTier(tier, getTeamRecord) {
+function bestRecordInTier(teams, tier, getTeamRecord) {
   let best = null;
   for (const team of teams) {
     if (team.tier !== tier) continue;
@@ -33,9 +32,9 @@ function StatBlock({ label, value, sub }) {
 }
 
 export default function Overview() {
-  const { seasonNumber, isSimulating, advanceSeason, resetSeason, results, getTeamRecord, getLeagueWireEvents } = useLeagueState();
-  const mlb1Leader = bestRecordInTier(TIERS.MLB1, getTeamRecord);
-  const mlb2Leader = bestRecordInTier(TIERS.MLB2, getTeamRecord);
+  const { teams, seasonNumber, isSimulating, advanceSeason, resetSeason, results, getTeamRecord, getLeagueWireEvents } = useLeagueState();
+  const mlb1Leader = bestRecordInTier(teams, TIERS.MLB1, getTeamRecord);
+  const mlb2Leader = bestRecordInTier(teams, TIERS.MLB2, getTeamRecord);
   const wireEvents = getLeagueWireEvents();
   const recentResults = results.slice(-RECENT_RESULTS_COUNT).reverse();
   const teamsById = new Map(teams.map((t) => [t.id, t]));

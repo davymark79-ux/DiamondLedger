@@ -23,10 +23,26 @@
 
 import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
 import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
+import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps } from '../engine/promotionRelegation.js';
 import { createRng } from '../models/generation/random.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v1'; // versioned — a future shape change just falls back to fresh rather than crashing on old data
+const STORAGE_KEY = 'diamondLedger.leagueState.v2'; // bumped from v1 — promotion/relegation added tierByTeamId/promotionRelegationSwaps to the state shape; an old v1 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+
+/**
+ * Applies each team's CURRENT (live, possibly promoted/relegated) tier on
+ * top of the static identity data from realLeague.js — city/nickname/
+ * marketSize/ownership/leagueId never change season-to-season, but tier now
+ * does. Used both when advancing a season (engine functions need the
+ * current tier to schedule/group/pick replacement-quality bands correctly)
+ * and by the UI (src/state/LeagueStateContext.jsx exposes this as `teams`).
+ * @param {object[]} baseTeams - realLeague.js's static teams array
+ * @param {Map<string, string>} tierByTeamId
+ * @returns {object[]} shallow copies with `.tier` overridden
+ */
+export function applyTierOverlay(baseTeams, tierByTeamId) {
+  return baseTeams.map((t) => ({ ...t, tier: tierByTeamId.get(t.id) ?? t.tier }));
+}
 
 function seasonRngForNumber(seasonNumber) {
   return createRng(SEASON_RNG_BASE_SEED + (seasonNumber - 1));
@@ -97,6 +113,8 @@ function serializeState(state) {
     rosterByTeamId: mapToObj(state.rosterByTeamId),
     managerByTeamId: mapToObj(state.managerByTeamId),
     roleStateById: mapToObj(state.roleStateById),
+    tierByTeamId: mapToObj(state.tierByTeamId),
+    promotionRelegationSwaps: state.promotionRelegationSwaps,
     seasonResult: serializeSeasonResult(state.seasonResult),
   };
 }
@@ -108,6 +126,8 @@ function deserializeState(plain) {
     rosterByTeamId: objToMap(plain.rosterByTeamId),
     managerByTeamId: objToMap(plain.managerByTeamId),
     roleStateById: objToMap(plain.roleStateById),
+    tierByTeamId: objToMap(plain.tierByTeamId),
+    promotionRelegationSwaps: plain.promotionRelegationSwaps,
     seasonResult: deserializeSeasonResult(plain.seasonResult),
   };
 }
@@ -150,6 +170,8 @@ function computeFreshSeason1State() {
     rosterByTeamId,
     managerByTeamId,
     roleStateById: new Map(),
+    tierByTeamId: new Map(teams.map((t) => [t.id, t.tier])),
+    promotionRelegationSwaps: [], // nothing to promote/relegate yet — no prior season exists to evaluate
     seasonResult,
   };
 }
@@ -187,9 +209,20 @@ export function advanceToNextSeason(state) {
   const asOfDate = new Date(state.asOfDate);
   asOfDate.setFullYear(asOfDate.getFullYear() + 1);
 
+  // Promotion/relegation is evaluated against the just-completed season's
+  // final standings, BEFORE building next season's rosters/schedule — its
+  // result (the new tierByTeamId) is what makes both replacement-player
+  // quality bands (engine/leagueProgression.js's qualityRangeForTeam) and
+  // next season's scheduling/grouping (engine/season.js's
+  // groupTeamsForScheduling) correctly reflect the swap.
+  const currentTeams = applyTierOverlay(teams, state.tierByTeamId);
+  const promotionRelegationSwaps = computePromotionRelegationSwaps(currentTeams, state.seasonResult.standingsById);
+  const tierByTeamId = applyPromotionRelegationSwaps(state.tierByTeamId, promotionRelegationSwaps);
+  const teamsForNextSeason = applyTierOverlay(teams, tierByTeamId);
+
   const rng = seasonRngForNumber(seasonNumber);
   const { rosterByTeamId, managerByTeamId } = advanceOffseason(
-    teams,
+    teamsForNextSeason,
     state.rosterByTeamId,
     state.seasonResult.managerAssignmentById,
     state.roleStateById, // mutated in place by advanceOffseason — the same Map instance is carried forward, per its own "owned across seasons by the caller" contract
@@ -198,7 +231,7 @@ export function advanceToNextSeason(state) {
   );
 
   const { seasonResult } = simulateOneSeason(
-    teams,
+    teamsForNextSeason,
     (id) => rosterByTeamId.get(id),
     (id) => managerByTeamId.get(id),
     rng
@@ -210,6 +243,8 @@ export function advanceToNextSeason(state) {
     rosterByTeamId,
     managerByTeamId,
     roleStateById: state.roleStateById,
+    tierByTeamId,
+    promotionRelegationSwaps,
     seasonResult,
   };
 }

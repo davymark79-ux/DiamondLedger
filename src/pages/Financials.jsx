@@ -1,8 +1,9 @@
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams } from '../data/realLeague';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 
 export default function Financials() {
+  const { teams } = useLeagueState();
   const sorted = [...teams].sort((a, b) => b.marketSize - a.marketSize);
 
   return (

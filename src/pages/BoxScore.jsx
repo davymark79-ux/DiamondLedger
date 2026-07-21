@@ -2,13 +2,10 @@ import { useState, useCallback } from 'react';
 import PageHeader from '../components/PageHeader';
 import { simulateGame, formatInningsPitched, computePitcherDecisions } from '../engine/index.js';
 import { createRng } from '../models/generation/random.js';
-import { teams } from '../data/realLeague.js';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { deriveGameContext } from '../data/gameContext.js';
 
-const sortedTeams = [...teams].sort((a, b) => `${a.city} ${a.nickname}`.localeCompare(`${b.city} ${b.nickname}`));
-
-function pickTwoDistinctTeamIds(rng) {
+function pickTwoDistinctTeamIds(teams, rng) {
   const first = Math.floor(rng() * teams.length);
   let second = Math.floor(rng() * teams.length);
   while (second === first) second = Math.floor(rng() * teams.length);
@@ -320,8 +317,9 @@ function PitchingTable({ label, side, decisions }) {
 }
 
 export default function BoxScore() {
-  const { buildMatchup } = useLeagueState();
-  const [[initialAway, initialHome]] = useState(() => pickTwoDistinctTeamIds(createRng(Date.now())));
+  const { teams, buildMatchup } = useLeagueState();
+  const sortedTeams = [...teams].sort((a, b) => `${a.city} ${a.nickname}`.localeCompare(`${b.city} ${b.nickname}`));
+  const [[initialAway, initialHome]] = useState(() => pickTwoDistinctTeamIds(teams, createRng(Date.now())));
   const [awayTeamId, setAwayTeamId] = useState(initialAway);
   const [homeTeamId, setHomeTeamId] = useState(initialHome);
   const [result, setResult] = useState(() => simulateMatchup(initialAway, initialHome, buildMatchup));
@@ -339,7 +337,7 @@ export default function BoxScore() {
     resimulate(awayTeamId, next);
   };
   const randomizeMatchup = () => {
-    const [away, home] = pickTwoDistinctTeamIds(createRng(Date.now()));
+    const [away, home] = pickTwoDistinctTeamIds(teams, createRng(Date.now()));
     setAwayTeamId(away);
     setHomeTeamId(home);
     resimulate(away, home);

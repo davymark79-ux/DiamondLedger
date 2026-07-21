@@ -1,7 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams } from '../data/realLeague';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { getAge } from '../models/Player';
 import { getManagerAge } from '../models/Manager';
@@ -306,7 +305,7 @@ function ManagerCard({ manager, changes = [] }) {
 
 export default function TeamDetail() {
   const { id } = useParams();
-  const { getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
+  const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
   const team = teams.find((t) => t.id === id);
 
   if (!team) {

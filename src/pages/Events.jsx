@@ -2,11 +2,12 @@ import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 
-// Only injury and firing events are real in this engine — mockData.js's old
-// 'financial'/'expansion'/'stadium'/'cba' categories had no underlying
-// system at all (the design doc's Scripted Event framework was never built,
-// see CLAUDE.md). Dropped rather than kept as dead filter options.
-const TYPES = ['all', 'injury', 'firing'];
+// Only injury, firing, and promotion/relegation events are real in this
+// engine — mockData.js's old 'financial'/'expansion'/'stadium'/'cba'
+// categories had no underlying system at all (the design doc's Scripted
+// Event framework was never built, see CLAUDE.md). Dropped rather than
+// kept as dead filter options.
+const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation'];
 
 export default function Events() {
   const [filter, setFilter] = useState('all');
@@ -19,7 +20,7 @@ export default function Events() {
       <PageHeader
         eyebrow="Season Activity"
         title="League Wire"
-        description="Real injury and manager Firing & Rehiring events from the simulated season. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings are a complete log. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
+        description="Real injury, manager Firing & Rehiring, and promotion/relegation events from the simulated season. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings and promotion/relegation are both complete logs. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
       />
 
       <div className="flex gap-1 mb-5 flex-wrap">
@@ -49,7 +50,7 @@ export default function Events() {
                   <span className="text-[10px] uppercase tracking-wider text-brass-bright/80">{e.type}</span>
                   <span className="text-xs text-ledger/40">{e.team}</span>
                 </div>
-                <span className="agate text-[11px] text-ledger/35">Game {e.gameNumber}</span>
+                <span className="agate text-[11px] text-ledger/35">{e.gameNumber >= 0 ? `Game ${e.gameNumber}` : 'Season Start'}</span>
               </div>
               <p className="text-sm text-ledger/85 leading-snug">{e.detail}</p>
             </div>

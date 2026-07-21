@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams as allTeams } from '../data/realLeague';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { TIERS } from '../models/constants';
 
@@ -10,7 +9,7 @@ const TIER_FILTERS = ['ALL', TIERS.MLB1, TIERS.MLB2];
 
 export default function Teams() {
   const [tier, setTier] = useState('ALL');
-  const { getTeamRecord } = useLeagueState();
+  const { teams: allTeams, getTeamRecord } = useLeagueState();
   const filtered = tier === 'ALL' ? allTeams : allTeams.filter((t) => t.tier === tier);
 
   return (

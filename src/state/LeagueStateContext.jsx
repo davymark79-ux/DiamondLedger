@@ -5,15 +5,14 @@
 // the function names/signatures match 1:1 so the migration is mechanical.
 
 import { createContext, useContext, useReducer, useState, useCallback, useMemo } from 'react';
-import { teams } from '../data/realLeague.js';
-import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState } from '../data/season.js';
+import { teams as staticTeams } from '../data/realLeague.js';
+import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState, applyTierOverlay } from '../data/season.js';
 import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
+import { getPromotionRelegationPairing } from '../models/League.js';
 import { LEAGUES } from '../models/constants.js';
 
 const LeagueStateContext = createContext(null);
-
-const teamsById = new Map(teams.map((t) => [t.id, t]));
 
 // A trivial, side-effect-free "replace state" reducer — safe under React 18
 // StrictMode's dev-mode double-invocation of reducer functions (same
@@ -53,6 +52,13 @@ function buildPlayersById(rosterByTeamId) {
 export function LeagueStateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialLeagueState);
   const [isSimulating, setIsSimulating] = useState(false);
+
+  // teams' identity fields (city/nickname/marketSize/ownership/leagueId)
+  // never change season-to-season, but tier now does (promotion/relegation)
+  // — this overlays the live tier on top of realLeague.js's static array, so
+  // every consumer of `teams` sees the CURRENT tier, not the season-1 one.
+  const teams = useMemo(() => applyTierOverlay(staticTeams, state.tierByTeamId), [state.tierByTeamId]);
+  const teamsById = useMemo(() => new Map(teams.map((t) => [t.id, t])), [teams]);
 
   const playersById = useMemo(() => buildPlayersById(state.rosterByTeamId), [state.rosterByTeamId]);
 
@@ -171,6 +177,30 @@ export function LeagueStateProvider({ children }) {
       });
     }
 
+    // Promotion/relegation happened at the boundary entering THIS season,
+    // before its first game — sorts as the oldest event in the feed
+    // (gameNumber -1, before any real in-season game's 0-based numbering).
+    for (const swap of state.promotionRelegationSwaps) {
+      const { relegatedFrom, promotedFrom } = getPromotionRelegationPairing(swap.leagueId);
+      const leagueName = LEAGUES[swap.leagueId].name;
+      const relegatedTeam = teamsById.get(swap.relegatedTeamId);
+      const promotedTeam = teamsById.get(swap.promotedTeamId);
+      events.push({
+        id: `relegation-${swap.relegatedTeamId}-${state.seasonNumber}`,
+        type: 'relegation',
+        gameNumber: -1,
+        team: relegatedTeam ? `${relegatedTeam.city} ${relegatedTeam.nickname}` : '—',
+        detail: `Relegated from ${relegatedFrom} to ${promotedFrom} — finished last in ${leagueName} ${relegatedFrom} last season.`,
+      });
+      events.push({
+        id: `promotion-${swap.promotedTeamId}-${state.seasonNumber}`,
+        type: 'promotion',
+        gameNumber: -1,
+        team: promotedTeam ? `${promotedTeam.city} ${promotedTeam.nickname}` : '—',
+        detail: `Promoted from ${promotedFrom} to ${relegatedFrom} — finished first in ${leagueName} ${promotedFrom} last season.`,
+      });
+    }
+
     events.sort((a, b) => b.gameNumber - a.gameNumber);
     return events;
   }
@@ -214,7 +244,9 @@ export function LeagueStateProvider({ children }) {
     isSimulating,
     advanceSeason,
     resetSeason,
+    teams,
     results: state.seasonResult.results,
+    promotionRelegationSwaps: state.promotionRelegationSwaps,
     getTeamRoster,
     getTeamRecord,
     getTeamResults,
