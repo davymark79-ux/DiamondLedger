@@ -45,7 +45,7 @@
 // as an explicit, flagged proxy wherever managers.md/awards-and-hall-of-
 // fame.md call for championship credit.
 
-import { buildSeasonSchedule, simulateSeason, groupTeamsForScheduling, BATTING_STAT_FIELDS, PITCHING_STAT_FIELDS, emptySeasonBattingTotals, emptySeasonPitchingTotals } from './season.js';
+import { buildSeasonSchedule, simulateSeason, groupTeamsForScheduling, BATTING_STAT_FIELDS, PITCHING_STAT_FIELDS, emptySeasonBattingTotals, emptySeasonPitchingTotals, TARGET_GAMES_PER_TEAM } from './season.js';
 import { advanceDevelopmentPeriodWithReassignment } from './development.js';
 import { rollRetirement, rollManagerRetirement } from './retirement.js';
 import { rollWriterRetirement } from './writerRetirement.js';
@@ -57,6 +57,24 @@ import { TIERS } from '../models/constants.js';
 
 function qualityRangeForTeam(team) {
   return ROSTER_QUALITY_BY_TIER[team.tier] ?? ROSTER_QUALITY_BY_TIER[TIERS.MLB2];
+}
+
+/**
+ * One season's worth of real games against a given roster/manager snapshot
+ * — the `buildSeasonSchedule` + `simulateSeason` pair, extracted so it's
+ * reusable both by this file's own per-season loop below and by a live,
+ * one-season-at-a-time caller (data/season.js's advanceToNextSeason).
+ * @param {object[]} teams
+ * @param {(teamId: string) => object} getTeamRoster
+ * @param {(teamId: string) => object|null} getTeamManager
+ * @param {() => number} rng
+ * @param {number} [gamesPerSeason] - real usage: TARGET_GAMES_PER_TEAM (150); shortened for fast validation runs (see validate-hall-of-fame.mjs)
+ * @returns {{schedule: object[], seasonResult: object}} seasonResult is simulateSeason()'s full return value
+ */
+export function simulateOneSeason(teams, getTeamRoster, getTeamManager, rng, gamesPerSeason = TARGET_GAMES_PER_TEAM) {
+  const schedule = buildSeasonSchedule(teams, gamesPerSeason, rng);
+  const seasonResult = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
+  return { schedule, seasonResult };
 }
 
 function advanceOnePlayer(player, team, roleStateById, rng, asOfDate) {
@@ -293,8 +311,7 @@ export function simulateLeagueHistory(teams, initialRosterByTeamId, initialManag
     registerRosterIdentities();
     const getTeamRosterFn = (teamId) => rosterByTeamId.get(teamId);
     const getTeamManagerFn = (teamId) => managerByTeamId.get(teamId);
-    const schedule = buildSeasonSchedule(teams, gamesPerSeason, rng);
-    const seasonResult = simulateSeason(teams, getTeamRosterFn, schedule, rng, getTeamManagerFn);
+    const { seasonResult } = simulateOneSeason(teams, getTeamRosterFn, getTeamManagerFn, rng, gamesPerSeason);
 
     foldStats(careerBattingStatsById, seasonResult.seasonBattingStatsById, BATTING_STAT_FIELDS);
     foldStats(careerPitchingStatsById, seasonResult.seasonPitchingStatsById, PITCHING_STAT_FIELDS);

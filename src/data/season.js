@@ -1,183 +1,215 @@
-// The real 50-team league's season — computed once at module load with a
-// fixed seed, same philosophy as realLeague.js (a stable, consistent world
-// across the app, not regenerated per page visit). No "simulate a new
-// season" button yet — that needs real shared app state to keep pages in
-// sync, which doesn't exist anywhere in this app today; see
-// baseball-sim-engine-build-order memory for the reasoning.
-
-import { teams, getTeamRoster, getTeamManager, playersById } from './realLeague.js';
-import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM, buildGameSide, resolveAvailableRoster, resolveRestedRoster } from '../engine/season.js';
-import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
-import { createRng } from '../models/generation/random.js';
-import { LEAGUES } from '../models/constants.js';
-
-const SEED = 20260201;
-
-const rng = createRng(SEED);
-
-export const schedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, rng);
-
-const { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, managerNameById, results } = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
-export { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, results };
-
-const teamsById = new Map(teams.map((t) => [t.id, t]));
-
-export function getTeamRecord(teamId) {
-  return standingsById.get(teamId) ?? { wins: 0, losses: 0 };
-}
-
-export function getTeamResults(teamId) {
-  return results.filter((r) => r.awayTeamId === teamId || r.homeTeamId === teamId);
-}
-
-// Current injury as of the end of the simulated season, or null if healthy
-// (or already recovered) — see engine/season.js's advanceInjuriesForTeam.
-export function getPlayerInjuryStatus(playerId) {
-  return injuryStatusById.get(playerId) ?? null;
-}
-
-// Consecutive games played (as of the end of the simulated season) without a
-// rest — see engine/season.js's advanceFatigueForTeam. 0 for anyone who
-// isn't a full-time lineup regular right now (bench, injured, or a Foundry
-// DH-slot player).
-export function getPlayerFatigueStatus(playerId) {
-  return consecutiveGamesPlayedById.get(playerId) ?? 0;
-}
-
-// Thin wrapper around positionPlayerFatigue.js's own formula, so page
-// components don't need to import the engine layer directly (pages import
-// from data/, data/ imports from engine/ — same layering the rest of this
-// app follows).
-export function getPlayerFatiguePenalty(playerId) {
-  return computeFatiguePenalty(getPlayerFatigueStatus(playerId));
-}
-
-// Current Hot/Cold Streak reading, or null if the player has no batting
-// record yet this season — see engine/hotColdStreaks.js. `tier` is already
-// gated (NEUTRAL both for a genuinely unremarkable reading and for "not
-// enough sample yet to confirm a streak") — read it directly rather than
-// re-deriving from standardDeviationsFromBaseline, which would lose that
-// distinction once a streak resets.
-export function getPlayerStreakState(playerId) {
-  return streakStateById.get(playerId) ?? null;
-}
-
-// Current manager as of the end of the simulated season — managers.md's
-// Career Lifecycle (Firing & Rehiring, engine/managerFiring.js) can change
-// a team's assignment mid-season, so this is NOT the same as realLeague.js's
-// static getTeamManager(). Falls back to the static assignment (should
-// never actually be needed, since every team is pre-seeded in
-// simulateSeason, but matches this codebase's existing graceful-fallback
-// convention elsewhere).
-export function getCurrentTeamManager(teamId) {
-  return managerAssignmentById.get(teamId) ?? getTeamManager(teamId);
-}
-
-// Every in-season Firing & Rehiring event for a team, oldest first — empty
-// if the team's manager was never fired this season (the common case).
-export function getTeamManagerChanges(teamId) {
-  return firings.filter((f) => f.teamId === teamId);
-}
-
-const INJURY_SEVERITY_LABELS = {
-  DAY_TO_DAY: 'day-to-day',
-  SHORT_TERM_IL: '10-day IL',
-  LONG_TERM_IL: '60-day IL',
-  SEASON_ENDING: 'season-ending',
-  CAREER_ENDING: 'career-ending',
-};
-
-export function formatWinPct(pct) {
-  return `.${String(Math.round(pct * 1000)).padStart(3, '0')}`;
-}
-
-// A real, league-wide activity feed for the UI's "League Wire" pages —
-// replaces mockData.js's old fabricated scriptedEvents (which invented
-// injury/firing/financial/expansion/stadium/CBA items). Only injury and
-// firing events are real in this engine; the other four categories have no
-// underlying system at all, so they're simply not represented here rather
-// than faked.
+// The real 50-team league's LIVE, advanceable season state — persisted to
+// localStorage so progress survives a reload (explicit user choice; the
+// simpler alternative was resetting to season 1 on every reload).
 //
-// Injuries are a real but PARTIAL picture: injuryStatusById only tracks
-// currently-active injuries (see engine/season.js's advanceInjuriesForTeam,
-// which deletes an entry once healed) — a player hurt earlier in the season
-// who has already recovered by season's end leaves no trace here. Firings
-// are a complete chronological log (engine/managerFiring.js's `firings`),
-// since nothing in this engine ever forgets a past firing event.
-export function getLeagueWireEvents() {
-  const events = [];
+// This module owns the pure state-transition + persistence logic; the React
+// wiring (Context/hook, the "Simulate Next Season" action, per-page getters)
+// lives in src/state/LeagueStateContext.jsx, which is the only thing that
+// imports from here in practice.
+//
+// Rng design: no single continuously-mutating rng instance is shared across
+// the app's lifetime. `createRng(seed)` returns a closure that mutates its
+// own internal state on every call — a single long-lived instance touched
+// anywhere React might double-invoke (a lazy useState initializer, a
+// useReducer reducer body — both of which React 18 StrictMode, active in
+// main.jsx, deliberately double-invokes in dev to surface impure code)
+// would silently desync from a StrictMode-free build. Instead,
+// `seasonRngForNumber(n)` derives a fresh, deterministic rng from the
+// season number alone — season 1 always reproduces the exact same result
+// (matching this league's original single-season seed, 20260201, so a
+// fresh browser with no saved state sees identical season-1 values to
+// before this feature existed), and there's nothing rng-related to
+// serialize for persistence either.
 
-  for (const [playerId, injury] of injuryStatusById) {
-    const player = playersById.get(playerId);
-    if (!player) continue;
-    const team = teamsById.get(player.teamId);
-    const remaining = Number.isFinite(injury.gamesRemaining) ? `, ${injury.gamesRemaining} games remaining` : '';
-    events.push({
-      id: `injury-${playerId}`,
-      type: 'injury',
-      gameNumber: injury.sustainedGameNumber,
-      team: team ? `${team.city} ${team.nickname}` : '—',
-      detail: `${player.firstName} ${player.lastName} (${injury.type}) — ${INJURY_SEVERITY_LABELS[injury.severity] ?? injury.severity}${remaining}.`,
-    });
+import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
+import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
+import { createRng } from '../models/generation/random.js';
+
+const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
+const STORAGE_KEY = 'diamondLedger.leagueState.v1'; // versioned — a future shape change just falls back to fresh rather than crashing on old data
+
+function seasonRngForNumber(seasonNumber) {
+  return createRng(SEASON_RNG_BASE_SEED + (seasonNumber - 1));
+}
+
+// ===== Map <-> plain-object conversion + Infinity-safe JSON (de)serialization =====
+// Real, not theoretical: injuryStatusById's gamesRemaining is a genuine
+// Infinity for season-/career-ending injuries (engine/injuries.js) — a
+// naive JSON.stringify silently turns that into null, which would make a
+// permanently-out player misread as recovering after a reload.
+
+const INFINITY_SENTINEL = '__Infinity__';
+const NEG_INFINITY_SENTINEL = '__-Infinity__';
+const NAN_SENTINEL = '__NaN__';
+
+function jsonReplacer(_key, value) {
+  if (value === Infinity) return INFINITY_SENTINEL;
+  if (value === -Infinity) return NEG_INFINITY_SENTINEL;
+  if (typeof value === 'number' && Number.isNaN(value)) return NAN_SENTINEL;
+  return value;
+}
+
+function jsonReviver(_key, value) {
+  if (value === INFINITY_SENTINEL) return Infinity;
+  if (value === NEG_INFINITY_SENTINEL) return -Infinity;
+  if (value === NAN_SENTINEL) return NaN;
+  return value;
+}
+
+function mapToObj(map) {
+  return Object.fromEntries(map);
+}
+
+function objToMap(obj) {
+  return new Map(Object.entries(obj ?? {}));
+}
+
+function serializeSeasonResult(seasonResult) {
+  return {
+    standingsById: mapToObj(seasonResult.standingsById),
+    injuryStatusById: mapToObj(seasonResult.injuryStatusById),
+    consecutiveGamesPlayedById: mapToObj(seasonResult.consecutiveGamesPlayedById),
+    streakStateById: mapToObj(seasonResult.streakStateById),
+    managerAssignmentById: mapToObj(seasonResult.managerAssignmentById),
+    managerNameById: mapToObj(seasonResult.managerNameById),
+    firings: seasonResult.firings,
+    results: seasonResult.results,
+  };
+}
+
+function deserializeSeasonResult(plain) {
+  return {
+    standingsById: objToMap(plain.standingsById),
+    injuryStatusById: objToMap(plain.injuryStatusById),
+    consecutiveGamesPlayedById: objToMap(plain.consecutiveGamesPlayedById),
+    streakStateById: objToMap(plain.streakStateById),
+    managerAssignmentById: objToMap(plain.managerAssignmentById),
+    managerNameById: objToMap(plain.managerNameById),
+    firings: plain.firings,
+    results: plain.results,
+  };
+}
+
+function serializeState(state) {
+  return {
+    seasonNumber: state.seasonNumber,
+    asOfDate: state.asOfDate.toISOString(),
+    rosterByTeamId: mapToObj(state.rosterByTeamId),
+    managerByTeamId: mapToObj(state.managerByTeamId),
+    roleStateById: mapToObj(state.roleStateById),
+    seasonResult: serializeSeasonResult(state.seasonResult),
+  };
+}
+
+function deserializeState(plain) {
+  return {
+    seasonNumber: plain.seasonNumber,
+    asOfDate: new Date(plain.asOfDate),
+    rosterByTeamId: objToMap(plain.rosterByTeamId),
+    managerByTeamId: objToMap(plain.managerByTeamId),
+    roleStateById: objToMap(plain.roleStateById),
+    seasonResult: deserializeSeasonResult(plain.seasonResult),
+  };
+}
+
+/** Persists the full live season state — call after every advanceToNextSeason(). Never throws (a full/blocked/absent localStorage — e.g. a Node script importing this module — just means progress won't survive a reload, not a crash). */
+export function saveState(state) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState(state), jsonReplacer));
+  } catch (err) {
+    console.warn('Failed to save league state to localStorage:', err);
   }
+}
 
-  for (const firing of firings) {
-    const team = teamsById.get(firing.teamId);
-    const fired = managerNameById.get(firing.firedManagerId);
-    const hired = managerNameById.get(firing.hiredManagerId);
-    events.push({
-      id: `firing-${firing.teamId}-${firing.gameNumber}`,
-      type: 'firing',
-      gameNumber: firing.gameNumber,
-      team: team ? `${team.city} ${team.nickname}` : '—',
-      detail: `Fired ${fired ? `${fired.firstName} ${fired.lastName}` : 'their manager'} (${formatWinPct(firing.winPctAtFiring)}), hired ${hired ? `${hired.firstName} ${hired.lastName}` : 'a replacement'}.`,
-    });
+function loadState() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return deserializeState(JSON.parse(raw, jsonReviver));
+  } catch (err) {
+    console.warn('Failed to load saved league state, starting fresh:', err);
+    return null;
   }
+}
 
-  events.sort((a, b) => b.gameNumber - a.gameNumber);
-  return events;
+function computeFreshSeason1State() {
+  const rosterByTeamId = new Map(teams.map((t) => [t.id, getTeamRoster(t.id)]));
+  const managerByTeamId = new Map(teams.map((t) => [t.id, getTeamManager(t.id)]));
+  const rng = seasonRngForNumber(1);
+  const { seasonResult } = simulateOneSeason(
+    teams,
+    (id) => rosterByTeamId.get(id),
+    (id) => managerByTeamId.get(id),
+    rng
+  );
+  return {
+    seasonNumber: 1,
+    asOfDate: new Date(),
+    rosterByTeamId,
+    managerByTeamId,
+    roleStateById: new Map(),
+    seasonResult,
+  };
+}
+
+/** Clears any saved progress and returns a fresh season-1 state. */
+export function resetToSeason1() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (err) {
+    console.warn('Failed to clear saved league state:', err);
+  }
+  return computeFreshSeason1State();
 }
 
 /**
- * A one-off matchup between two REAL teams for the /box-score page —
- * replaces the old simDemoRoster.js synthetic-player generator entirely.
- * Reuses the exact same real-roster + injury-filtering + auto-rest +
- * manager/streak wiring engine/season.js's own simulateSeason() loop uses
- * per game, so this is subject to the live singleton's current end-of-
- * season state: a player hurt or fatigued as of the simulated season's end
- * is correctly unavailable/rested here too, not simulated in an isolated
- * vacuum with a fresh healthy roster every time.
- *
- * No rotation-index tracking exists outside the season loop for a single
- * standalone game, so this always starts each team's rotation[0] (its
- * de facto ace) — a deliberate, honest simplification, not a bug.
- * @param {string} awayTeamId
- * @param {string} homeTeamId
- * @param {() => number} rng - same rng the caller passes to simulateGame(),
- *   so the whole matchup (roster resolution + the game itself) is
- *   reproducible from one seed.
- * @returns {{awayTeam: object, homeTeam: object, away: object, home: object}}
- *   `away`/`home` are ready to pass directly as simulateGame()'s matchup arg.
+ * The state the app boots with — a saved season if one exists, otherwise a
+ * fresh season 1. Computed exactly once at module load (eager, outside
+ * React entirely) so there's no lazy initializer or effect for StrictMode
+ * to double-invoke.
  */
-export function buildRealMatchup(awayTeamId, homeTeamId, rng) {
-  const awayTeam = teamsById.get(awayTeamId);
-  const homeTeam = teamsById.get(homeTeamId);
-  const dhRule = LEAGUES[awayTeam.leagueId].dhRule; // same league for both sides, guaranteed by the caller
+export const initialLeagueState = loadState() ?? computeFreshSeason1State();
 
-  const awayManager = getCurrentTeamManager(awayTeamId) ?? undefined;
-  const homeManager = getCurrentTeamManager(homeTeamId) ?? undefined;
+/**
+ * One offseason (growth/retirement/replenishment for every team) plus the
+ * next season's full 150-game simulation, composed the same way
+ * engine/leagueProgression.js's own simulateLeagueHistory() loop does it —
+ * just one season at a time instead of a fixed N-season batch. Pure:
+ * returns a new state object, does not touch storage itself (the caller —
+ * LeagueStateContext.jsx's advanceSeason() — calls saveState() explicitly).
+ * @param {object} state - the current live state (this module's own shape)
+ * @returns {object} the next season's state, same shape
+ */
+export function advanceToNextSeason(state) {
+  const seasonNumber = state.seasonNumber + 1;
+  const asOfDate = new Date(state.asOfDate);
+  asOfDate.setFullYear(asOfDate.getFullYear() + 1);
 
-  const awayInjuryResolved = resolveAvailableRoster(getTeamRoster(awayTeamId), injuryStatusById);
-  const homeInjuryResolved = resolveAvailableRoster(getTeamRoster(homeTeamId), injuryStatusById);
-  const awayRoster = resolveRestedRoster(awayInjuryResolved, consecutiveGamesPlayedById, awayManager, rng);
-  const homeRoster = resolveRestedRoster(homeInjuryResolved, consecutiveGamesPlayedById, homeManager, rng);
-  const awayStarter = awayRoster.rotation[0];
-  const homeStarter = homeRoster.rotation[0];
+  const rng = seasonRngForNumber(seasonNumber);
+  const { rosterByTeamId, managerByTeamId } = advanceOffseason(
+    teams,
+    state.rosterByTeamId,
+    state.seasonResult.managerAssignmentById,
+    state.roleStateById, // mutated in place by advanceOffseason — the same Map instance is carried forward, per its own "owned across seasons by the caller" contract
+    asOfDate,
+    rng
+  );
+
+  const { seasonResult } = simulateOneSeason(
+    teams,
+    (id) => rosterByTeamId.get(id),
+    (id) => managerByTeamId.get(id),
+    rng
+  );
 
   return {
-    awayTeam,
-    homeTeam,
-    away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById),
-    home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById),
+    seasonNumber,
+    asOfDate,
+    rosterByTeamId,
+    managerByTeamId,
+    roleStateById: state.roleStateById,
+    seasonResult,
   };
 }

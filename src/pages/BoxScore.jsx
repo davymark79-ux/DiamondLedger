@@ -3,7 +3,7 @@ import PageHeader from '../components/PageHeader';
 import { simulateGame, formatInningsPitched, computePitcherDecisions } from '../engine/index.js';
 import { createRng } from '../models/generation/random.js';
 import { teams } from '../data/realLeague.js';
-import { buildRealMatchup } from '../data/season.js';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { deriveGameContext } from '../data/gameContext.js';
 
 const sortedTeams = [...teams].sort((a, b) => `${a.city} ${a.nickname}`.localeCompare(`${b.city} ${b.nickname}`));
@@ -15,9 +15,9 @@ function pickTwoDistinctTeamIds(rng) {
   return [teams[first].id, teams[second].id];
 }
 
-function simulateMatchup(awayTeamId, homeTeamId) {
+function simulateMatchup(awayTeamId, homeTeamId, buildMatchup) {
   const rng = createRng(Date.now());
-  const matchup = buildRealMatchup(awayTeamId, homeTeamId, rng);
+  const matchup = buildMatchup(awayTeamId, homeTeamId, rng);
   const box = simulateGame({ away: matchup.away, home: matchup.home }, { rng });
   const decisions = computePitcherDecisions(box);
   const gameContext = deriveGameContext(matchup, box, rng);
@@ -320,12 +320,13 @@ function PitchingTable({ label, side, decisions }) {
 }
 
 export default function BoxScore() {
+  const { buildMatchup } = useLeagueState();
   const [[initialAway, initialHome]] = useState(() => pickTwoDistinctTeamIds(createRng(Date.now())));
   const [awayTeamId, setAwayTeamId] = useState(initialAway);
   const [homeTeamId, setHomeTeamId] = useState(initialHome);
-  const [result, setResult] = useState(() => simulateMatchup(initialAway, initialHome));
+  const [result, setResult] = useState(() => simulateMatchup(initialAway, initialHome, buildMatchup));
 
-  const resimulate = useCallback((away, home) => setResult(simulateMatchup(away, home)), []);
+  const resimulate = useCallback((away, home) => setResult(simulateMatchup(away, home, buildMatchup)), [buildMatchup]);
 
   const handleAwayChange = (e) => {
     const next = e.target.value;

@@ -1,7 +1,7 @@
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
 import { teams } from '../data/realLeague';
-import { getTeamRecord, results, getLeagueWireEvents } from '../data/season';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { TIERS } from '../models/constants';
 
 const RECENT_RESULTS_COUNT = 5;
@@ -11,7 +11,7 @@ const WIRE_ITEMS_COUNT = 5;
 // ranking — Foundry and Exchange clubs never play each other in the regular
 // season (league-structure.md), so there's no real single "MLB1 leader" the
 // way a Standings.jsx table would produce one.
-function bestRecordInTier(tier) {
+function bestRecordInTier(tier, getTeamRecord) {
   let best = null;
   for (const team of teams) {
     if (team.tier !== tier) continue;
@@ -33,8 +33,9 @@ function StatBlock({ label, value, sub }) {
 }
 
 export default function Overview() {
-  const mlb1Leader = bestRecordInTier(TIERS.MLB1);
-  const mlb2Leader = bestRecordInTier(TIERS.MLB2);
+  const { seasonNumber, isSimulating, advanceSeason, resetSeason, results, getTeamRecord, getLeagueWireEvents } = useLeagueState();
+  const mlb1Leader = bestRecordInTier(TIERS.MLB1, getTeamRecord);
+  const mlb2Leader = bestRecordInTier(TIERS.MLB2, getTeamRecord);
   const wireEvents = getLeagueWireEvents();
   const recentResults = results.slice(-RECENT_RESULTS_COUNT).reverse();
   const teamsById = new Map(teams.map((t) => [t.id, t]));
@@ -42,10 +43,32 @@ export default function Overview() {
   return (
     <div>
       <PageHeader
-        eyebrow="Season Snapshot"
+        eyebrow={`Season ${seasonNumber}`}
         title="League Overview"
-        description="A full season has already been simulated across all 50 real teams (no calendar/date model yet — see Schedule for the same caveat). Everything below is real, engine-computed data."
+        description="A full season has already been simulated across all 50 real teams (no calendar/date model yet — see Schedule for the same caveat). Progress is saved to this browser, so simulating another season persists across reloads. Everything below is real, engine-computed data."
       />
+
+      <div className="flex items-center justify-between mb-6">
+        <div className="text-sm text-ledger/40">
+          {isSimulating ? 'Simulating next season… this may take a few seconds.' : `Season ${seasonNumber} complete.`}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={resetSeason}
+            disabled={isSimulating}
+            className="px-4 py-1.5 text-sm tracking-wide rounded-sm text-ledger/50 hover:text-ledger bg-field-dark border border-field-line transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Reset to Season 1
+          </button>
+          <button
+            onClick={advanceSeason}
+            disabled={isSimulating}
+            className="px-4 py-1.5 text-sm tracking-wide rounded-sm bg-brass text-field-dark font-medium hover:bg-brass-bright transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isSimulating ? 'Simulating…' : 'Simulate Next Season'}
+          </button>
+        </div>
+      </div>
 
       <div className="grid grid-cols-4 gap-4 mb-10">
         <StatBlock label="MLB1 Pace-Setter" value={`${mlb1Leader.team.city} ${mlb1Leader.team.nickname}`} sub={`${mlb1Leader.wins}-${mlb1Leader.losses}`} />

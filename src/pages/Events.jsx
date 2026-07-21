@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
-import { getLeagueWireEvents } from '../data/season';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 
 // Only injury and firing events are real in this engine — mockData.js's old
 // 'financial'/'expansion'/'stadium'/'cba' categories had no underlying
@@ -10,6 +10,7 @@ const TYPES = ['all', 'injury', 'firing'];
 
 export default function Events() {
   const [filter, setFilter] = useState('all');
+  const { getLeagueWireEvents } = useLeagueState();
   const events = getLeagueWireEvents();
   const filtered = filter === 'all' ? events : events.filter((e) => e.type === filter);
 

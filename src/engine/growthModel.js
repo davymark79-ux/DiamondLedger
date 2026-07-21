@@ -137,7 +137,7 @@ export function advanceDevelopmentPeriod(player, options) {
       injuryImpact: options.injuryImpact,
     });
     const uncapped = clampRating(rating.current + growth);
-    ratings[attribute] = { ...rating, current: Math.min(uncapped, rating.truePotential) };
+    ratings[attribute] = { ...rating, current: Math.round(Math.min(uncapped, rating.truePotential)) };
   }
   return { ...player, ratings };
 }

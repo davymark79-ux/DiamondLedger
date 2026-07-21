@@ -1,14 +1,15 @@
 import { useParams, Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
-import { teams, getTeamRoster } from '../data/realLeague';
-import { getTeamRecord, getTeamResults, getPlayerInjuryStatus, getPlayerFatigueStatus, getPlayerFatiguePenalty, getPlayerStreakState, getCurrentTeamManager, getTeamManagerChanges } from '../data/season';
+import { teams } from '../data/realLeague';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { getAge } from '../models/Player';
 import { getManagerAge } from '../models/Manager';
 import { HOT_COLD_TIERS, MANAGER_SLIDER_NAMES, MANAGER_ORIGINS } from '../models/constants';
 import { NATION_CODES } from '../models/generation/nationalityPools';
 
 function InjuryTag({ playerId }) {
+  const { getPlayerInjuryStatus } = useLeagueState();
   const injury = getPlayerInjuryStatus(playerId);
   if (!injury || injury.gamesRemaining <= 0) return null;
   const label = Number.isFinite(injury.gamesRemaining) ? `IL · ${injury.gamesRemaining}g` : 'OUT';
@@ -19,6 +20,7 @@ function InjuryTag({ playerId }) {
 // are never tracked by this mechanic, so this only ever renders on
 // PositionPlayerRow, never PitcherRow.
 function FatigueTag({ playerId }) {
+  const { getPlayerFatiguePenalty, getPlayerFatigueStatus } = useLeagueState();
   if (getPlayerFatiguePenalty(playerId) <= 0) return null;
   const games = getPlayerFatigueStatus(playerId);
   return (
@@ -48,6 +50,7 @@ const STREAK_TAG_COLOR = Object.freeze({
 });
 
 function StreakTag({ playerId }) {
+  const { getPlayerStreakState } = useLeagueState();
   const streak = getPlayerStreakState(playerId);
   const label = streak && STREAK_TAG_LABELS[streak.tier];
   if (!label) return null;
@@ -193,6 +196,7 @@ function PitchersTable({ rotation, bullpen }) {
 }
 
 function SeasonResultsTable({ teamId, teamsById }) {
+  const { getTeamResults } = useLeagueState();
   const teamResults = getTeamResults(teamId);
   const recent = teamResults.slice(-RECENT_RESULTS_COUNT).reverse();
 
@@ -302,6 +306,7 @@ function ManagerCard({ manager, changes = [] }) {
 
 export default function TeamDetail() {
   const { id } = useParams();
+  const { getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
   const team = teams.find((t) => t.id === id);
 
   if (!team) {

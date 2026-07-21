@@ -1,13 +1,14 @@
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
 import { teams } from '../data/realLeague';
-import { results } from '../data/season';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 
 const RECENT_RESULTS_COUNT = 30;
 
 const teamsById = new Map(teams.map((t) => [t.id, t]));
 
 export default function Schedule() {
+  const { results } = useLeagueState();
   // results is chronologically ordered (gameNumber ascending); most recent
   // is the tail end.
   const recent = results.slice(-RECENT_RESULTS_COUNT).reverse();

@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
 import { teams } from '../data/realLeague';
-import { getTeamRecord } from '../data/season';
+import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { TIERS, LEAGUES } from '../models/constants';
 
 // Standings are grouped by (tier, league) — the same grouping the schedule
 // itself uses, since there's no interleague play in the regular season
 // (league-structure.md). A flat single table per tier (the old mockData-era
 // shape) would mix teams that never actually play each other.
-function buildGroupStandings(tier, leagueId) {
+function buildGroupStandings(tier, leagueId, getTeamRecord) {
   const groupTeams = teams.filter((t) => t.tier === tier && t.leagueId === leagueId);
   const withRecords = groupTeams.map((team) => {
     const { wins, losses } = getTeamRecord(team.id);
@@ -58,9 +58,10 @@ function StandingsTable({ label, standings }) {
 
 export default function Standings() {
   const [tier, setTier] = useState(TIERS.MLB1);
+  const { getTeamRecord } = useLeagueState();
 
-  const foundryStandings = buildGroupStandings(tier, 'FOUNDRY');
-  const exchangeStandings = buildGroupStandings(tier, 'EXCHANGE');
+  const foundryStandings = buildGroupStandings(tier, 'FOUNDRY', getTeamRecord);
+  const exchangeStandings = buildGroupStandings(tier, 'EXCHANGE', getTeamRecord);
 
   return (
     <div>
