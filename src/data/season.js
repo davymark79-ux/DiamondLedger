@@ -23,25 +23,32 @@
 
 import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
 import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
-import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps } from '../engine/promotionRelegation.js';
+import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDivisionSwaps } from '../engine/promotionRelegation.js';
+import { simulatePlayoffs } from '../engine/playoffs.js';
 import { createRng } from '../models/generation/random.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v2'; // bumped from v1 — promotion/relegation added tierByTeamId/promotionRelegationSwaps to the state shape; an old v1 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+const STORAGE_KEY = 'diamondLedger.leagueState.v3'; // bumped from v2 — playoffs added divisionByTeamId/playoffResult to the state shape; an old v1/v2 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
 
 /**
- * Applies each team's CURRENT (live, possibly promoted/relegated) tier on
- * top of the static identity data from realLeague.js — city/nickname/
- * marketSize/ownership/leagueId never change season-to-season, but tier now
- * does. Used both when advancing a season (engine functions need the
- * current tier to schedule/group/pick replacement-quality bands correctly)
- * and by the UI (src/state/LeagueStateContext.jsx exposes this as `teams`).
+ * Applies each team's CURRENT (live, possibly promoted/relegated) tier and
+ * division on top of the static identity data from realLeague.js —
+ * city/nickname/marketSize/ownership/leagueId never change season-to-
+ * season, but tier and division now can. Used both when advancing a season
+ * (engine functions need the current tier/division to schedule/group/pick
+ * replacement-quality bands/find playoff division champs correctly) and by
+ * the UI (src/state/LeagueStateContext.jsx exposes this as `teams`).
  * @param {object[]} baseTeams - realLeague.js's static teams array
  * @param {Map<string, string>} tierByTeamId
- * @returns {object[]} shallow copies with `.tier` overridden
+ * @param {Map<string, string>} divisionByTeamId
+ * @returns {object[]} shallow copies with `.tier`/`.division` overridden
  */
-export function applyTierOverlay(baseTeams, tierByTeamId) {
-  return baseTeams.map((t) => ({ ...t, tier: tierByTeamId.get(t.id) ?? t.tier }));
+export function applyLiveOverrides(baseTeams, tierByTeamId, divisionByTeamId) {
+  return baseTeams.map((t) => ({
+    ...t,
+    tier: tierByTeamId.get(t.id) ?? t.tier,
+    division: divisionByTeamId.get(t.id) ?? t.division,
+  }));
 }
 
 function seasonRngForNumber(seasonNumber) {
@@ -114,7 +121,9 @@ function serializeState(state) {
     managerByTeamId: mapToObj(state.managerByTeamId),
     roleStateById: mapToObj(state.roleStateById),
     tierByTeamId: mapToObj(state.tierByTeamId),
+    divisionByTeamId: mapToObj(state.divisionByTeamId),
     promotionRelegationSwaps: state.promotionRelegationSwaps,
+    playoffResult: state.playoffResult, // plain, JSON-native already — no Maps inside it
     seasonResult: serializeSeasonResult(state.seasonResult),
   };
 }
@@ -127,7 +136,9 @@ function deserializeState(plain) {
     managerByTeamId: objToMap(plain.managerByTeamId),
     roleStateById: objToMap(plain.roleStateById),
     tierByTeamId: objToMap(plain.tierByTeamId),
+    divisionByTeamId: objToMap(plain.divisionByTeamId),
     promotionRelegationSwaps: plain.promotionRelegationSwaps,
+    playoffResult: plain.playoffResult,
     seasonResult: deserializeSeasonResult(plain.seasonResult),
   };
 }
@@ -164,6 +175,16 @@ function computeFreshSeason1State() {
     (id) => managerByTeamId.get(id),
     rng
   );
+  const playoffResult = simulatePlayoffs(
+    teams,
+    seasonResult.standingsById,
+    rosterByTeamId,
+    managerByTeamId,
+    seasonResult.injuryStatusById,
+    seasonResult.consecutiveGamesPlayedById,
+    seasonResult.streakStateById,
+    rng
+  );
   return {
     seasonNumber: 1,
     asOfDate: new Date(),
@@ -171,7 +192,9 @@ function computeFreshSeason1State() {
     managerByTeamId,
     roleStateById: new Map(),
     tierByTeamId: new Map(teams.map((t) => [t.id, t.tier])),
+    divisionByTeamId: new Map(teams.map((t) => [t.id, t.division])),
     promotionRelegationSwaps: [], // nothing to promote/relegate yet — no prior season exists to evaluate
+    playoffResult,
     seasonResult,
   };
 }
@@ -211,14 +234,17 @@ export function advanceToNextSeason(state) {
 
   // Promotion/relegation is evaluated against the just-completed season's
   // final standings, BEFORE building next season's rosters/schedule — its
-  // result (the new tierByTeamId) is what makes both replacement-player
-  // quality bands (engine/leagueProgression.js's qualityRangeForTeam) and
-  // next season's scheduling/grouping (engine/season.js's
-  // groupTeamsForScheduling) correctly reflect the swap.
-  const currentTeams = applyTierOverlay(teams, state.tierByTeamId);
+  // result (the new tierByTeamId/divisionByTeamId) is what makes
+  // replacement-player quality bands (engine/leagueProgression.js's
+  // qualityRangeForTeam), next season's scheduling/grouping
+  // (engine/season.js's groupTeamsForScheduling), and next season's own
+  // playoff bracket (engine/playoffs.js's computeMLB1PlayoffField, which
+  // needs a correct division per team) all correctly reflect the swap.
+  const currentTeams = applyLiveOverrides(teams, state.tierByTeamId, state.divisionByTeamId);
   const promotionRelegationSwaps = computePromotionRelegationSwaps(currentTeams, state.seasonResult.standingsById);
   const tierByTeamId = applyPromotionRelegationSwaps(state.tierByTeamId, promotionRelegationSwaps);
-  const teamsForNextSeason = applyTierOverlay(teams, tierByTeamId);
+  const divisionByTeamId = applyDivisionSwaps(state.divisionByTeamId, promotionRelegationSwaps);
+  const teamsForNextSeason = applyLiveOverrides(teams, tierByTeamId, divisionByTeamId);
 
   const rng = seasonRngForNumber(seasonNumber);
   const { rosterByTeamId, managerByTeamId } = advanceOffseason(
@@ -237,6 +263,20 @@ export function advanceToNextSeason(state) {
     rng
   );
 
+  // Playoffs are THIS new season's own culmination — computed from its own
+  // just-finished standings, not the previous season's (that's what
+  // promotion/relegation above already used).
+  const playoffResult = simulatePlayoffs(
+    teamsForNextSeason,
+    seasonResult.standingsById,
+    rosterByTeamId,
+    managerByTeamId,
+    seasonResult.injuryStatusById,
+    seasonResult.consecutiveGamesPlayedById,
+    seasonResult.streakStateById,
+    rng
+  );
+
   return {
     seasonNumber,
     asOfDate,
@@ -244,7 +284,9 @@ export function advanceToNextSeason(state) {
     managerByTeamId,
     roleStateById: state.roleStateById,
     tierByTeamId,
+    divisionByTeamId,
     promotionRelegationSwaps,
+    playoffResult,
     seasonResult,
   };
 }

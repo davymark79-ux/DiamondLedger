@@ -3,6 +3,7 @@ import { LeagueStateProvider } from './state/LeagueStateContext.jsx';
 import Sidebar from './components/Sidebar';
 import Overview from './pages/Overview';
 import Standings from './pages/Standings';
+import Playoffs from './pages/Playoffs';
 import Teams from './pages/Teams';
 import TeamDetail from './pages/TeamDetail';
 import Schedule from './pages/Schedule';
@@ -22,6 +23,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Overview />} />
               <Route path="/standings" element={<Standings />} />
+              <Route path="/playoffs" element={<Playoffs />} />
               <Route path="/teams" element={<Teams />} />
               <Route path="/teams/:id" element={<TeamDetail />} />
               <Route path="/schedule" element={<Schedule />} />

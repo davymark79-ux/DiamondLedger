@@ -32,7 +32,7 @@ function best(teams, standingsById) {
 }
 
 /**
- * @param {object[]} teams - with each team's CURRENT tier already applied (data/season.js's applyTierOverlay)
+ * @param {object[]} teams - with each team's CURRENT tier already applied (data/season.js's applyLiveOverrides)
  * @param {Map<string, {wins: number, losses: number}>} standingsById - the just-completed season's final standings
  * @returns {{leagueId: string, relegatedTeamId: string, promotedTeamId: string}[]} one entry per league
  */
@@ -62,6 +62,31 @@ export function applyPromotionRelegationSwaps(tierByTeamId, swaps) {
     const { relegatedFrom, promotedFrom } = getPromotionRelegationPairing(leagueId);
     next.set(relegatedTeamId, promotedFrom); // the relegated club moves DOWN to the promoted-from tier (MLB2)
     next.set(promotedTeamId, relegatedFrom); // the promoted club moves UP to the relegated-from tier (MLB1)
+  }
+  return next;
+}
+
+/**
+ * A gap promotion/relegation itself never needed to solve (division had
+ * zero consumers when it shipped) but real playoff bracket construction
+ * does (needs a promoted team's division to be a real MLB1 one, not a
+ * stale MLB2 leftover). league-structure.md's own Assumptions section
+ * anticipates a "per-season reshuffle mechanic" without specifying one —
+ * since this is always a strict 1-for-1 swap, the clean, deterministic fix
+ * needs no new judgment call: the promoted team inherits the exact
+ * division slot the relegated team is vacating, and vice versa. This
+ * preserves every division's team count exactly, forever.
+ * @param {Map<string, string>} divisionByTeamId
+ * @param {{leagueId: string, relegatedTeamId: string, promotedTeamId: string}[]} swaps
+ * @returns {Map<string, string>} a new Map with the swapped teams' divisions flipped
+ */
+export function applyDivisionSwaps(divisionByTeamId, swaps) {
+  const next = new Map(divisionByTeamId);
+  for (const { relegatedTeamId, promotedTeamId } of swaps) {
+    const relegatedOldDivision = divisionByTeamId.get(relegatedTeamId);
+    const promotedOldDivision = divisionByTeamId.get(promotedTeamId);
+    next.set(relegatedTeamId, promotedOldDivision); // relegated club inherits the promoted club's old (MLB2) division
+    next.set(promotedTeamId, relegatedOldDivision); // promoted club inherits the relegated club's old (MLB1) division
   }
   return next;
 }

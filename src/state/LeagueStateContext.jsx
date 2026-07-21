@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useReducer, useState, useCallback, useMemo } from 'react';
 import { teams as staticTeams } from '../data/realLeague.js';
-import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState, applyTierOverlay } from '../data/season.js';
+import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState, applyLiveOverrides } from '../data/season.js';
 import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
 import { getPromotionRelegationPairing } from '../models/League.js';
@@ -54,10 +54,14 @@ export function LeagueStateProvider({ children }) {
   const [isSimulating, setIsSimulating] = useState(false);
 
   // teams' identity fields (city/nickname/marketSize/ownership/leagueId)
-  // never change season-to-season, but tier now does (promotion/relegation)
-  // — this overlays the live tier on top of realLeague.js's static array, so
-  // every consumer of `teams` sees the CURRENT tier, not the season-1 one.
-  const teams = useMemo(() => applyTierOverlay(staticTeams, state.tierByTeamId), [state.tierByTeamId]);
+  // never change season-to-season, but tier and division now do
+  // (promotion/relegation) — this overlays the live values on top of
+  // realLeague.js's static array, so every consumer of `teams` sees the
+  // CURRENT tier/division, not the season-1 ones.
+  const teams = useMemo(
+    () => applyLiveOverrides(staticTeams, state.tierByTeamId, state.divisionByTeamId),
+    [state.tierByTeamId, state.divisionByTeamId]
+  );
   const teamsById = useMemo(() => new Map(teams.map((t) => [t.id, t])), [teams]);
 
   const playersById = useMemo(() => buildPlayersById(state.rosterByTeamId), [state.rosterByTeamId]);
@@ -247,6 +251,7 @@ export function LeagueStateProvider({ children }) {
     teams,
     results: state.seasonResult.results,
     promotionRelegationSwaps: state.promotionRelegationSwaps,
+    playoffResult: state.playoffResult,
     getTeamRoster,
     getTeamRecord,
     getTeamResults,
