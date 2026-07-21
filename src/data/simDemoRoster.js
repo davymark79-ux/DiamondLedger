@@ -11,7 +11,7 @@
 import { createPlayer, createRating } from '../models/Player.js';
 import { createRng, randomInRange, pick } from '../models/generation/random.js';
 import { FIRST_NAMES_USA, LAST_NAMES_USA } from '../models/generation/namePools.js';
-import { mlbTeams } from './mockData.js';
+import { teams as realTeams } from './realLeague.js';
 
 const LINEUP_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'];
 const BENCH_POSITIONS = ['C', '1B', 'SS', 'LF'];
@@ -101,11 +101,16 @@ function buildDemoTeam(rng, idPrefix) {
   return { lineup, startingPitcher, bullpen, bench };
 }
 
+// mockData.js's old fictional mlbTeams pool was flavor-only here (team
+// names/market size for attendance/venue text, not connected to real
+// rosters at all) — swapped for the real 50-team pool now that mockData.js
+// is gone, which also means marketSize (see computeAttendance below) is a
+// real per-team value instead of a fabricated random one.
 function pickTwoDistinctTeams(rng) {
-  const first = Math.floor(rng() * mlbTeams.length);
-  let second = Math.floor(rng() * mlbTeams.length);
-  while (second === first) second = Math.floor(rng() * mlbTeams.length);
-  return [mlbTeams[first], mlbTeams[second]];
+  const first = Math.floor(rng() * realTeams.length);
+  let second = Math.floor(rng() * realTeams.length);
+  while (second === first) second = Math.floor(rng() * realTeams.length);
+  return [realTeams[first], realTeams[second]];
 }
 
 /**
@@ -147,8 +152,8 @@ function formatGameTime(minutes) {
 /**
  * Derives cosmetic game-info (venue, attendance, game time) from real
  * sim/data inputs rather than fabricating flavor text: attendance scales
- * with the home team's marketSize (already tracked in mockData.js), and
- * game time scales with the actual simulated pitch count.
+ * with the home team's real marketSize (realLeague.js), and game time
+ * scales with the actual simulated pitch count.
  * @param {object} matchup - from buildDemoMatchup()
  * @param {object} box - simulateGame()'s return value
  * @param {() => number} rng

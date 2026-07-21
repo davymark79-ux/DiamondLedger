@@ -5,7 +5,7 @@
 // sync, which doesn't exist anywhere in this app today; see
 // baseball-sim-engine-build-order memory for the reasoning.
 
-import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
+import { teams, getTeamRoster, getTeamManager, playersById } from './realLeague.js';
 import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
 import { createRng } from '../models/generation/random.js';
@@ -16,8 +16,10 @@ const rng = createRng(SEED);
 
 export const schedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, rng);
 
-const { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, results } = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
+const { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, managerAssignmentById, firings, managerNameById, results } = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
 export { standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById, results };
+
+const teamsById = new Map(teams.map((t) => [t.id, t]));
 
 export function getTeamRecord(teamId) {
   return standingsById.get(teamId) ?? { wins: 0, losses: 0 };
@@ -74,4 +76,63 @@ export function getCurrentTeamManager(teamId) {
 // if the team's manager was never fired this season (the common case).
 export function getTeamManagerChanges(teamId) {
   return firings.filter((f) => f.teamId === teamId);
+}
+
+const INJURY_SEVERITY_LABELS = {
+  DAY_TO_DAY: 'day-to-day',
+  SHORT_TERM_IL: '10-day IL',
+  LONG_TERM_IL: '60-day IL',
+  SEASON_ENDING: 'season-ending',
+  CAREER_ENDING: 'career-ending',
+};
+
+export function formatWinPct(pct) {
+  return `.${String(Math.round(pct * 1000)).padStart(3, '0')}`;
+}
+
+// A real, league-wide activity feed for the UI's "League Wire" pages —
+// replaces mockData.js's old fabricated scriptedEvents (which invented
+// injury/firing/financial/expansion/stadium/CBA items). Only injury and
+// firing events are real in this engine; the other four categories have no
+// underlying system at all, so they're simply not represented here rather
+// than faked.
+//
+// Injuries are a real but PARTIAL picture: injuryStatusById only tracks
+// currently-active injuries (see engine/season.js's advanceInjuriesForTeam,
+// which deletes an entry once healed) — a player hurt earlier in the season
+// who has already recovered by season's end leaves no trace here. Firings
+// are a complete chronological log (engine/managerFiring.js's `firings`),
+// since nothing in this engine ever forgets a past firing event.
+export function getLeagueWireEvents() {
+  const events = [];
+
+  for (const [playerId, injury] of injuryStatusById) {
+    const player = playersById.get(playerId);
+    if (!player) continue;
+    const team = teamsById.get(player.teamId);
+    const remaining = Number.isFinite(injury.gamesRemaining) ? `, ${injury.gamesRemaining} games remaining` : '';
+    events.push({
+      id: `injury-${playerId}`,
+      type: 'injury',
+      gameNumber: injury.sustainedGameNumber,
+      team: team ? `${team.city} ${team.nickname}` : '—',
+      detail: `${player.firstName} ${player.lastName} (${injury.type}) — ${INJURY_SEVERITY_LABELS[injury.severity] ?? injury.severity}${remaining}.`,
+    });
+  }
+
+  for (const firing of firings) {
+    const team = teamsById.get(firing.teamId);
+    const fired = managerNameById.get(firing.firedManagerId);
+    const hired = managerNameById.get(firing.hiredManagerId);
+    events.push({
+      id: `firing-${firing.teamId}-${firing.gameNumber}`,
+      type: 'firing',
+      gameNumber: firing.gameNumber,
+      team: team ? `${team.city} ${team.nickname}` : '—',
+      detail: `Fired ${fired ? `${fired.firstName} ${fired.lastName}` : 'their manager'} (${formatWinPct(firing.winPctAtFiring)}), hired ${hired ? `${hired.firstName} ${hired.lastName}` : 'a replacement'}.`,
+    });
+  }
+
+  events.sort((a, b) => b.gameNumber - a.gameNumber);
+  return events;
 }

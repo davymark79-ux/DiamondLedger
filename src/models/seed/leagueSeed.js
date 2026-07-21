@@ -4,9 +4,10 @@
 // generated). Market-size and ownership numbers aren't specced in that doc
 // yet, so they're left at createTeam()'s neutral defaults here.
 
-import { createTeam } from '../Team.js';
+import { createTeam, createOwnership } from '../Team.js';
 import { createLeague } from '../League.js';
 import { LEAGUE_IDS, TIERS } from '../constants.js';
+import { createRng } from '../generation/random.js';
 
 const ROSTER = [
   // MLB1 — Atlantic
@@ -70,6 +71,64 @@ const ROSTER = [
   { tier: TIERS.MLB2, division: 'Coastal', city: 'St. Paul', league: LEAGUE_IDS.EXCHANGE, nickname: 'Bluffs' },
 ];
 
+// Illustrative placeholder market-size values (0-1 scale), loosely informed
+// by real-world metro population/market-prestige intuition — not sourced
+// from any real market-size dataset, since league-structure.md never specs
+// exact numbers. Same "needs real playtesting" tuning status as every other
+// numeric constant in this engine. Cities sharing a metro area with another
+// club in this table (e.g. both Chicago clubs, or Newark alongside New York)
+// each get their own full value rather than splitting one metro's size in
+// half — a deliberate simplification, not an oversight.
+const MARKET_SIZE_BY_CITY = Object.freeze({
+  'New York': 1.0,
+  'Los Angeles': 0.92,
+  Chicago: 0.82,
+  Philadelphia: 0.66,
+  'San Francisco': 0.64,
+  Dallas: 0.62,
+  Houston: 0.6,
+  'Washington, D.C.': 0.58,
+  Boston: 0.56,
+  Atlanta: 0.54,
+  Miami: 0.52,
+  Detroit: 0.48,
+  Seattle: 0.46,
+  Phoenix: 0.45,
+  Minneapolis: 0.43,
+  'San Diego': 0.42,
+  Denver: 0.4,
+  Baltimore: 0.38,
+  'St. Louis': 0.36,
+  Tampa: 0.34,
+  Charlotte: 0.33,
+  'San Antonio': 0.32,
+  Orlando: 0.31,
+  'Portland, OR': 0.3,
+  Anaheim: 0.3,
+  'Fort Worth': 0.28,
+  Oakland: 0.28,
+  'Fort Lauderdale': 0.28,
+  Riverside: 0.27,
+  'San Bernardino': 0.25,
+  'Alexandria, VA': 0.26,
+  'Newark, NJ': 0.3,
+  Tacoma: 0.24,
+  'Cambridge, MA': 0.24,
+  'Camden, NJ': 0.24,
+  'St. Petersburg': 0.22,
+  'St. Paul': 0.22,
+  'Vancouver, WA': 0.2,
+});
+const DEFAULT_MARKET_SIZE = 0.4; // fallback for any city not in the table above
+
+// Owner wealth varies per team but has no real-world anchor at all (unlike
+// market size, which at least loosely tracks real metro size) — randomized
+// on its own dedicated rng stream, seeded separately from realLeague.js's
+// roster/manager generation so changing this never perturbs which players
+// or managers get generated (see baseball-sim-engine-build-order memory).
+const TEAM_ECONOMICS_SEED = 20260301;
+const OWNER_WEALTH_RANGE = [0.2, 0.8];
+
 function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
@@ -79,6 +138,7 @@ function slugify(value) {
  * @returns {{ teams: object[], leagues: Record<string, object> }}
  */
 export function buildSeedLeagues() {
+  const economicsRng = createRng(TEAM_ECONOMICS_SEED);
   const teams = ROSTER.map((entry) =>
     createTeam({
       id: `${slugify(entry.city)}-${entry.league.toLowerCase()}`,
@@ -87,6 +147,10 @@ export function buildSeedLeagues() {
       leagueId: entry.league,
       tier: entry.tier,
       division: entry.division,
+      marketSize: MARKET_SIZE_BY_CITY[entry.city] ?? DEFAULT_MARKET_SIZE,
+      ownership: createOwnership({
+        ownerWealth: Math.round((OWNER_WEALTH_RANGE[0] + economicsRng() * (OWNER_WEALTH_RANGE[1] - OWNER_WEALTH_RANGE[0])) * 100) / 100,
+      }),
     })
   );
 

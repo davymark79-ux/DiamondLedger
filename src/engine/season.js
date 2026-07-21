@@ -340,6 +340,7 @@ function maybeFireAndRehireManager(
   ownerPatienceById,
   availableManagerPool,
   firings,
+  managerNameById,
   gameNumber,
   rng
 ) {
@@ -370,6 +371,11 @@ function maybeFireAndRehireManager(
     ? availableManagerPool.shift()
     : generateManager({ rng, leagueId: team.leagueId, overrides: { id: `${teamId}-hire-${gameNumber}`, teamId } });
   availableManagerPool.push({ ...currentManager, teamId: null });
+  // A freshly-generated hire's name isn't in the registry yet (only the
+  // original 50 seed managers are, pre-loop) — a pool-reused manager is
+  // already registered from his own earlier hire event, so this is
+  // idempotent for him, not redundant bookkeeping for a new one.
+  managerNameById.set(hired.id, { firstName: hired.firstName, lastName: hired.lastName });
 
   managerAssignmentById.set(teamId, { ...hired, teamId });
   tenureRecordById.set(teamId, { wins: 0, losses: 0 });
@@ -394,6 +400,7 @@ function maybeFireAndRehireManager(
  *   streakStateById: Map<string, {baselineCompositeValue: number, recentCompositeValue: number|null, standardDeviationsFromBaseline: number, tier: string}>,
  *   managerAssignmentById: Map<string, object|null> - the CURRENT manager per team, post any in-season firings/rehires,
  *   firings: {gameNumber: number, teamId: string, firedManagerId: string, hiredManagerId: string, winPctAtFiring: number}[],
+ *   managerNameById: Map<string, {firstName: string, lastName: string}> - every manager who ever held a real assignment this season, by id (not just the current one per team) — lets a caller resolve names for a historical firing event,
  *   seasonBattingStatsById: Map<string, object> - summed boxScore.js battingLine fields across every game this player batted in,
  *   seasonPitchingStatsById: Map<string, object> - summed pitchingLine fields plus wins/losses/saves across every game this pitcher appeared in,
  *   results: {gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
@@ -421,6 +428,17 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
   const ownerPatienceById = new Map();
   const availableManagerPool = [];
   const firings = [];
+  // Name lookup by manager id, independent of current assignment — a UI
+  // wire-feed showing "Team X fired Manager A, hired Manager B" needs both
+  // names even after A is no longer any team's current manager. Seeded from
+  // every original team manager up front; maybeFireAndRehireManager
+  // registers each newly-generated hire as it happens.
+  const managerNameById = new Map(
+    teams
+      .map((team) => managerAssignmentById.get(team.id))
+      .filter(Boolean)
+      .map((manager) => [manager.id, { firstName: manager.firstName, lastName: manager.lastName }])
+  );
 
   for (const game of schedule) {
     const awayTeam = teamsById.get(game.awayTeamId);
@@ -493,11 +511,11 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
 
     maybeFireAndRehireManager(
       game.awayTeamId, awayTeam, awayWon,
-      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, game.gameNumber, rng
+      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
     );
     maybeFireAndRehireManager(
       game.homeTeamId, homeTeam, !awayWon,
-      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, game.gameNumber, rng
+      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
     );
 
     results.push({
@@ -515,6 +533,6 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
 
   return {
     standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById,
-    managerAssignmentById, firings, seasonBattingStatsById, seasonPitchingStatsById, results,
+    managerAssignmentById, firings, managerNameById, seasonBattingStatsById, seasonPitchingStatsById, results,
   };
 }
