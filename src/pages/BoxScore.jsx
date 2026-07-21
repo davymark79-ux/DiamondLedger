@@ -1,11 +1,23 @@
 import { useState, useCallback } from 'react';
 import PageHeader from '../components/PageHeader';
 import { simulateGame, formatInningsPitched, computePitcherDecisions } from '../engine/index.js';
-import { buildDemoMatchup, createRng, deriveGameContext } from '../data/simDemoRoster.js';
+import { createRng } from '../models/generation/random.js';
+import { teams } from '../data/realLeague.js';
+import { buildRealMatchup } from '../data/season.js';
+import { deriveGameContext } from '../data/gameContext.js';
 
-function simulateNewGame() {
+const sortedTeams = [...teams].sort((a, b) => `${a.city} ${a.nickname}`.localeCompare(`${b.city} ${b.nickname}`));
+
+function pickTwoDistinctTeamIds(rng) {
+  const first = Math.floor(rng() * teams.length);
+  let second = Math.floor(rng() * teams.length);
+  while (second === first) second = Math.floor(rng() * teams.length);
+  return [teams[first].id, teams[second].id];
+}
+
+function simulateMatchup(awayTeamId, homeTeamId) {
   const rng = createRng(Date.now());
-  const matchup = buildDemoMatchup(rng);
+  const matchup = buildRealMatchup(awayTeamId, homeTeamId, rng);
   const box = simulateGame({ away: matchup.away, home: matchup.home }, { rng });
   const decisions = computePitcherDecisions(box);
   const gameContext = deriveGameContext(matchup, box, rng);
@@ -308,21 +320,66 @@ function PitchingTable({ label, side, decisions }) {
 }
 
 export default function BoxScore() {
-  const [result, setResult] = useState(() => simulateNewGame());
-  const resimulate = useCallback(() => setResult(simulateNewGame()), []);
+  const [[initialAway, initialHome]] = useState(() => pickTwoDistinctTeamIds(createRng(Date.now())));
+  const [awayTeamId, setAwayTeamId] = useState(initialAway);
+  const [homeTeamId, setHomeTeamId] = useState(initialHome);
+  const [result, setResult] = useState(() => simulateMatchup(initialAway, initialHome));
+
+  const resimulate = useCallback((away, home) => setResult(simulateMatchup(away, home)), []);
+
+  const handleAwayChange = (e) => {
+    const next = e.target.value;
+    setAwayTeamId(next);
+    resimulate(next, homeTeamId);
+  };
+  const handleHomeChange = (e) => {
+    const next = e.target.value;
+    setHomeTeamId(next);
+    resimulate(awayTeamId, next);
+  };
+  const randomizeMatchup = () => {
+    const [away, home] = pickTwoDistinctTeamIds(createRng(Date.now()));
+    setAwayTeamId(away);
+    setHomeTeamId(home);
+    resimulate(away, home);
+  };
 
   const { matchup, box, decisions, gameContext } = result;
   const awayLabel = `${matchup.awayTeam.city} ${matchup.awayTeam.nickname}`;
   const homeLabel = `${matchup.homeTeam.city} ${matchup.homeTeam.nickname}`;
   const winner = box.away.runs > box.home.runs ? awayLabel : homeLabel;
 
+  const selectClass = 'bg-field-dark border border-field-line rounded-sm px-2 py-1.5 text-sm text-ledger/85';
+
   return (
     <div>
       <PageHeader
         eyebrow="Live Sim"
         title="Box Score"
-        description="A real plate-appearance-by-plate-appearance simulated game, using generated rosters (not real team lineups — Team.roster isn't wired to real players yet). Venue/attendance/game time are derived from real sim data (market size, pitch count) — not modeled stadium/weather systems, which don't exist yet."
+        description="A real plate-appearance-by-plate-appearance simulated game between two real teams from the 50-team league — real rosters, real managers' tendencies, and the same live season-end state data/season.js already tracks (a currently-injured or overworked player is correctly unavailable here too, not a fresh healthy roster every time). Each team's rotation[0] starts, since there's no rotation-index tracking outside the season loop for a standalone game. Venue/attendance/game time are derived from real sim data (market size, pitch count) — not modeled stadium/weather systems, which don't exist yet."
       />
+
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <select value={awayTeamId} onChange={handleAwayChange} className={selectClass}>
+            {sortedTeams.filter((t) => t.id !== homeTeamId).map((t) => (
+              <option key={t.id} value={t.id}>{t.city} {t.nickname} ({t.tier})</option>
+            ))}
+          </select>
+          <span className="text-ledger/30 text-sm">at</span>
+          <select value={homeTeamId} onChange={handleHomeChange} className={selectClass}>
+            {sortedTeams.filter((t) => t.id !== awayTeamId).map((t) => (
+              <option key={t.id} value={t.id}>{t.city} {t.nickname} ({t.tier})</option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={randomizeMatchup}
+          className="px-4 py-1.5 text-sm tracking-wide rounded-sm text-ledger/50 hover:text-ledger bg-field-dark border border-field-line transition-colors"
+        >
+          Random Matchup
+        </button>
+      </div>
 
       <div className="flex items-center justify-between mb-1.5">
         <div className="text-sm text-ledger/60">
@@ -333,10 +390,10 @@ export default function BoxScore() {
           <span className="text-ledger/40">{box.innings} innings</span>
         </div>
         <button
-          onClick={resimulate}
+          onClick={() => resimulate(awayTeamId, homeTeamId)}
           className="px-4 py-1.5 text-sm tracking-wide rounded-sm bg-brass text-field-dark font-medium hover:bg-brass-bright transition-colors"
         >
-          Simulate Another Game
+          Simulate Again
         </button>
       </div>
 

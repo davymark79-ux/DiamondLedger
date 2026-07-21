@@ -118,7 +118,11 @@ function positionPlayersInGame(roster, dhRule) {
   return dhRule ? roster.lineup : roster.lineup.filter((player) => player.primaryPosition !== 'DH');
 }
 
-function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById) {
+// Exported for reuse by data/season.js's buildRealMatchup() — the one-off
+// /box-score matchup builder needs exactly this same "roster -> game side"
+// construction (DH-aware lineup, manager/streak/fatigue wiring), not a
+// second copy of it.
+export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById) {
   const fieldPlayers = positionPlayersInGame(roster, dhRule);
   const lineup = dhRule ? fieldPlayers : [...fieldPlayers, startingPitcher];
   // dhRule/managerProfile/streakStateById all ride along on the side object

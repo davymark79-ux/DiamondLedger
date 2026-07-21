@@ -6,9 +6,10 @@
 // baseball-sim-engine-build-order memory for the reasoning.
 
 import { teams, getTeamRoster, getTeamManager, playersById } from './realLeague.js';
-import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM } from '../engine/season.js';
+import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM, buildGameSide, resolveAvailableRoster, resolveRestedRoster } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
 import { createRng } from '../models/generation/random.js';
+import { LEAGUES } from '../models/constants.js';
 
 const SEED = 20260201;
 
@@ -135,4 +136,48 @@ export function getLeagueWireEvents() {
 
   events.sort((a, b) => b.gameNumber - a.gameNumber);
   return events;
+}
+
+/**
+ * A one-off matchup between two REAL teams for the /box-score page —
+ * replaces the old simDemoRoster.js synthetic-player generator entirely.
+ * Reuses the exact same real-roster + injury-filtering + auto-rest +
+ * manager/streak wiring engine/season.js's own simulateSeason() loop uses
+ * per game, so this is subject to the live singleton's current end-of-
+ * season state: a player hurt or fatigued as of the simulated season's end
+ * is correctly unavailable/rested here too, not simulated in an isolated
+ * vacuum with a fresh healthy roster every time.
+ *
+ * No rotation-index tracking exists outside the season loop for a single
+ * standalone game, so this always starts each team's rotation[0] (its
+ * de facto ace) — a deliberate, honest simplification, not a bug.
+ * @param {string} awayTeamId
+ * @param {string} homeTeamId
+ * @param {() => number} rng - same rng the caller passes to simulateGame(),
+ *   so the whole matchup (roster resolution + the game itself) is
+ *   reproducible from one seed.
+ * @returns {{awayTeam: object, homeTeam: object, away: object, home: object}}
+ *   `away`/`home` are ready to pass directly as simulateGame()'s matchup arg.
+ */
+export function buildRealMatchup(awayTeamId, homeTeamId, rng) {
+  const awayTeam = teamsById.get(awayTeamId);
+  const homeTeam = teamsById.get(homeTeamId);
+  const dhRule = LEAGUES[awayTeam.leagueId].dhRule; // same league for both sides, guaranteed by the caller
+
+  const awayManager = getCurrentTeamManager(awayTeamId) ?? undefined;
+  const homeManager = getCurrentTeamManager(homeTeamId) ?? undefined;
+
+  const awayInjuryResolved = resolveAvailableRoster(getTeamRoster(awayTeamId), injuryStatusById);
+  const homeInjuryResolved = resolveAvailableRoster(getTeamRoster(homeTeamId), injuryStatusById);
+  const awayRoster = resolveRestedRoster(awayInjuryResolved, consecutiveGamesPlayedById, awayManager, rng);
+  const homeRoster = resolveRestedRoster(homeInjuryResolved, consecutiveGamesPlayedById, homeManager, rng);
+  const awayStarter = awayRoster.rotation[0];
+  const homeStarter = homeRoster.rotation[0];
+
+  return {
+    awayTeam,
+    homeTeam,
+    away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById),
+    home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById),
+  };
 }
