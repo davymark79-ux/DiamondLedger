@@ -29,10 +29,17 @@ import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDi
 import { simulatePlayoffs } from '../engine/playoffs.js';
 import { computeDraftOrder, buildDraftPicks } from '../engine/draft.js';
 import { generateHsClass, seedInitialCollegePopulation, runCollegePathway } from '../engine/college.js';
+import {
+  seedInitialAcademyPopulation,
+  generateAcademyClass,
+  computeInternationalDraftOrder,
+  buildInternationalDraftPicks,
+  runInternationalPathway,
+} from '../engine/internationalAcademy.js';
 import { createRng } from '../models/generation/random.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v6'; // bumped from v5 — the College System (Phase 3 of the Path to Draft/Minors/Free-Agency arc) added collegeEnrollmentById/collegePlayersById/freeAgentPoolById to the state shape; an old v1-v5 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+const STORAGE_KEY = 'diamondLedger.leagueState.v7'; // bumped from v6 — International Academy + International Draft (Phase 4 of the Path to Draft/Minors/Free-Agency arc) added academyEnrollmentById/academyPlayersById/internationalFreeAgentPoolById + a new internationalDraftResult field to the state shape; an old v1-v6 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -74,6 +81,58 @@ function runDraftAndCollegePathway(
   );
 
   return { seasonNumber, picks, selections, collegeSummary: summary };
+}
+
+/**
+ * Runs this season's international draft (a real, separate draft from the
+ * domestic one above — no lottery, see engine/internationalAcademy.js's
+ * header for why) against the international academy population, processing
+ * the full pathway alongside it (college fold-in, signing-window
+ * outcomes, year advancement, free-agent-pool pruning) — see
+ * engine/internationalAcademy.js's runInternationalPathway. Mutates
+ * `affiliateRosterByClubId`/`academyEnrollmentById`/`academyPlayersById`/
+ * `collegeEnrollmentById`/`collegePlayersById`/
+ * `internationalFreeAgentPoolById` in place, same ownership contract as
+ * runDraftAndCollegePathway above.
+ *
+ * MUST run AFTER runDraftAndCollegePathway for the same season, not before
+ * or interleaved: the college fold-in adds brand-new freshman entries into
+ * collegeEnrollmentById via College's own enrollFreshman(), which must only
+ * become eligible for NEXT season's domestic college draft, not
+ * retroactively join one that already resolved earlier in this same call.
+ * @param {object[]} currentTeams
+ * @param {Map<string, {wins: number, losses: number}>} standingsById
+ * @param {Map<string, object>} affiliateRosterByClubId
+ * @param {Map<string, object>} academyEnrollmentById
+ * @param {Map<string, object>} academyPlayersById
+ * @param {Map<string, object>} collegeEnrollmentById
+ * @param {Map<string, object>} collegePlayersById
+ * @param {Map<string, object>} internationalFreeAgentPoolById
+ * @param {number} seasonNumber
+ * @param {() => number} rng
+ * @param {Date} asOfDate
+ * @returns {{ seasonNumber: number, picks: object[], selections: object[], internationalSummary: object }}
+ */
+function runInternationalPathwayForSeason(
+  currentTeams, standingsById, affiliateRosterByClubId,
+  academyEnrollmentById, academyPlayersById,
+  collegeEnrollmentById, collegePlayersById,
+  internationalFreeAgentPoolById, seasonNumber, rng, asOfDate
+) {
+  const order = computeInternationalDraftOrder(currentTeams, standingsById);
+  const picks = buildInternationalDraftPicks(order);
+  const { players: freshAcademyClass, enrollments: freshAcademyEnrollments } =
+    generateAcademyClass(rng, asOfDate, `intl-s${seasonNumber}`);
+
+  const { summary, selections } = runInternationalPathway(
+    picks, freshAcademyClass, freshAcademyEnrollments,
+    academyEnrollmentById, academyPlayersById,
+    collegeEnrollmentById, collegePlayersById,
+    internationalFreeAgentPoolById, affiliateRosterByClubId,
+    rng, asOfDate
+  );
+
+  return { seasonNumber, picks, selections, internationalSummary: summary };
 }
 
 /**
@@ -182,6 +241,13 @@ function serializeState(state) {
     collegeEnrollmentById: mapToObj(state.collegeEnrollmentById),
     collegePlayersById: mapToObj(state.collegePlayersById),
     freeAgentPoolById: mapToObj(state.freeAgentPoolById),
+    // International Academy + International Draft (Phase 4) — a real,
+    // separate population/pool from College's own (see
+    // engine/internationalAcademy.js's header for why it's kept separate).
+    academyEnrollmentById: mapToObj(state.academyEnrollmentById),
+    academyPlayersById: mapToObj(state.academyPlayersById),
+    internationalFreeAgentPoolById: mapToObj(state.internationalFreeAgentPoolById),
+    internationalDraftResult: state.internationalDraftResult, // plain, JSON-native already — no Maps inside it
   };
 }
 
@@ -203,6 +269,10 @@ function deserializeState(plain) {
     collegeEnrollmentById: objToMap(plain.collegeEnrollmentById),
     collegePlayersById: objToMap(plain.collegePlayersById),
     freeAgentPoolById: objToMap(plain.freeAgentPoolById),
+    academyEnrollmentById: objToMap(plain.academyEnrollmentById),
+    academyPlayersById: objToMap(plain.academyPlayersById),
+    internationalFreeAgentPoolById: objToMap(plain.internationalFreeAgentPoolById),
+    internationalDraftResult: plain.internationalDraftResult,
   };
 }
 
@@ -243,6 +313,12 @@ function computeFreshSeason1State() {
   const { collegeEnrollmentById, collegePlayersById } = seedInitialCollegePopulation(rng, asOfDate);
   const freeAgentPoolById = new Map();
 
+  // Same one-time, season-1-only bootstrap idea as College's, but for the
+  // international academy's own fixed 3-year window (see
+  // engine/internationalAcademy.js's seedInitialAcademyPopulation).
+  const { academyEnrollmentById, academyPlayersById } = seedInitialAcademyPopulation(rng, asOfDate);
+  const internationalFreeAgentPoolById = new Map();
+
   const { seasonResult } = simulateOneSeason(
     teams,
     (id) => rosterByTeamId.get(id),
@@ -272,6 +348,17 @@ function computeFreshSeason1State() {
     1, rng, asOfDate
   );
 
+  // Runs AFTER the domestic draft/college pathway above — see
+  // runInternationalPathwayForSeason's header for why the ordering matters
+  // (its college fold-in must not retroactively join a draft that already
+  // resolved earlier in this same call).
+  const internationalDraftResult = runInternationalPathwayForSeason(
+    teams, seasonResult.standingsById, affiliateRosterByClubId,
+    academyEnrollmentById, academyPlayersById,
+    collegeEnrollmentById, collegePlayersById,
+    internationalFreeAgentPoolById, 1, rng, asOfDate
+  );
+
   return {
     seasonNumber: 1,
     asOfDate,
@@ -289,6 +376,10 @@ function computeFreshSeason1State() {
     collegeEnrollmentById,
     collegePlayersById,
     freeAgentPoolById,
+    academyEnrollmentById,
+    academyPlayersById,
+    internationalFreeAgentPoolById,
+    internationalDraftResult,
   };
 }
 
@@ -404,6 +495,25 @@ export function advanceToNextSeason(state) {
     asOfDate
   );
 
+  // Same "this new season's own culmination" timing as the domestic draft
+  // above, and must run AFTER it — see runInternationalPathwayForSeason's
+  // header. academyEnrollmentById/academyPlayersById/
+  // internationalFreeAgentPoolById are mutated in place and carried
+  // forward, same ownership contract as everything else this arc touches.
+  const internationalDraftResult = runInternationalPathwayForSeason(
+    teamsForNextSeason,
+    seasonResult.standingsById,
+    state.affiliateRosterByClubId,
+    state.academyEnrollmentById,
+    state.academyPlayersById,
+    state.collegeEnrollmentById,
+    state.collegePlayersById,
+    state.internationalFreeAgentPoolById,
+    seasonNumber,
+    rng,
+    asOfDate
+  );
+
   return {
     seasonNumber,
     asOfDate,
@@ -421,5 +531,9 @@ export function advanceToNextSeason(state) {
     collegeEnrollmentById: state.collegeEnrollmentById,
     collegePlayersById: state.collegePlayersById,
     freeAgentPoolById: state.freeAgentPoolById,
+    academyEnrollmentById: state.academyEnrollmentById,
+    academyPlayersById: state.academyPlayersById,
+    internationalFreeAgentPoolById: state.internationalFreeAgentPoolById,
+    internationalDraftResult,
   };
 }

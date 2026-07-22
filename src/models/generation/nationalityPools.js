@@ -79,6 +79,19 @@ export function pickBirthNation(rng) {
   return pickWeighted(rng, BIRTH_NATION_POOL);
 }
 
+// International Academy generation (engine/internationalAcademy.js, Phase 4
+// of the "Path to Draft, Minors & Free Agency" arc) — the same real-nation
+// pool as BIRTH_NATION_POOL, minus USA (now exclusively the domestic HS
+// pipeline's population, see engine/college.js's generateHsClass, which
+// forces overrides.birthNation: 'USA'). pickWeighted() normalizes weights
+// internally, so simply filtering out USA's entry is sufficient — no manual
+// renormalization needed.
+export const INTERNATIONAL_NATION_POOL = Object.freeze(BIRTH_NATION_POOL.filter((entry) => entry.value !== 'USA'));
+
+export function pickInternationalBirthNation(rng) {
+  return pickWeighted(rng, INTERNATIONAL_NATION_POOL);
+}
+
 // Distinct sampling (no repeats, never equal to birthNation) from
 // HERITAGE_NATION_POOL — small enough (max 2 picks) that simple rejection
 // sampling is fine, no need for a general-purpose shuffle utility.

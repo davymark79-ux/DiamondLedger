@@ -310,9 +310,10 @@ function ManagerCard({ manager, changes = [] }) {
 // No per-affiliate roster drill-down yet — a reasonable follow-up once a
 // later phase of this arc needs it, not required to prove this phase works.
 function FarmSystemCard({ teamId }) {
-  const { getAffiliateClub, getAffiliateStandings, getTeamCollegeRightsCount } = useLeagueState();
+  const { getAffiliateClub, getAffiliateStandings, getTeamCollegeRightsCount, getTeamInternationalSigningsCount } = useLeagueState();
   const levels = [...MINOR_LEAGUE_LEVELS_ORDER].reverse();
   const collegeRightsCount = getTeamCollegeRightsCount(teamId);
+  const internationalSigningsCount = getTeamInternationalSigningsCount(teamId);
 
   return (
     <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
@@ -337,6 +338,12 @@ function FarmSystemCard({ teamId }) {
           browsable list is future polish. */}
       <div className="px-4 py-1.5 text-xs text-ledger/50">
         College Draft Rights Held: <span className="agate text-ledger/80">{collegeRightsCount}</span>
+      </div>
+      {/* International Academy + International Draft (engine/internationalAcademy.js)
+          — no rights-holding concept exists here (see its file header), so
+          this is season-scoped, not a running count like the line above. */}
+      <div className="px-4 py-1.5 text-xs text-ledger/50">
+        International Signings This Season: <span className="agate text-ledger/80">{internationalSigningsCount}</span>
       </div>
     </div>
   );

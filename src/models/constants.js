@@ -93,11 +93,15 @@ export const FAN_OWNERSHIP_MIN_FAN_SHARE = 0.51;
 // Rookie/A/AA/AAA/MLB are minor/major-league levels. ROOKIE added for the
 // Minor League System (minor-leagues.md/rookie-league.md) — sits between
 // HS and COLLEGE in variance below, since Rookie ball's population skews
-// HS-signee-heavy (rookie-league.md).
+// HS-signee-heavy (rookie-league.md). INTERNATIONAL_ACADEMY added for Phase
+// 4 (player-pathway.md's International Pathway) — kept as its own level
+// rather than reusing COLLEGE's bucket, matching this codebase's own
+// precedent of giving each new amateur pathway its own variance slot.
 export const DEVELOPMENT_LEVELS = Object.freeze({
   HS: 'HS',
   COLLEGE: 'COLLEGE',
   ROOKIE: 'ROOKIE',
+  INTERNATIONAL_ACADEMY: 'INTERNATIONAL_ACADEMY',
   A: 'A',
   AA: 'AA',
   AAA: 'AAA',
@@ -106,10 +110,14 @@ export const DEVELOPMENT_LEVELS = Object.freeze({
 
 // Illustrative placeholder std. devs for the per-attribute variance roll —
 // widest at the lowest levels, narrows with level. Needs real playtesting.
+// INTERNATIONAL_ACADEMY matches ROOKIE's value — both represent a raw,
+// still-maturing, non-affiliated-org population at a similar age band, not
+// COLLEGE's more homogenous ~30-program set or HS's single-year snapshot.
 export const VARIANCE_STD_DEV_BY_LEVEL = Object.freeze({
   [DEVELOPMENT_LEVELS.HS]: 8,
   [DEVELOPMENT_LEVELS.COLLEGE]: 7,
   [DEVELOPMENT_LEVELS.ROOKIE]: 7.5,
+  [DEVELOPMENT_LEVELS.INTERNATIONAL_ACADEMY]: 7.5,
   [DEVELOPMENT_LEVELS.A]: 5.5,
   [DEVELOPMENT_LEVELS.AA]: 3.5,
   [DEVELOPMENT_LEVELS.AAA]: 2,
@@ -240,6 +248,45 @@ export const NIL_QUALITY_WEIGHT = 0.5;
 export const SIGN_VALUE_BASE = 50;
 export const SIGN_VALUE_ROUND_DECAY = 4;
 export const STAY_PROBABILITY_SENSITIVITY = 0.01;
+
+// International Academy + International Draft — Phase 4 of the "Path to
+// Draft, Minors & Free Agency" arc (player-pathway.md's International
+// Pathway section). Reuses College's prestige/specialty growth bonuses
+// directly (same mechanic, PRESTIGE_GROWTH_BONUS_BY_TIER/SPECIALTY_GROWTH_BONUS
+// above); diverges with its own numbers where the doc/user explicitly
+// called for a separate shape (a fixed 3-year window instead of variable
+// 4-year eligibility, no redshirt, a separate free-agent pool + retirement
+// curve). All placeholders, needs real playtesting like every other
+// numeric constant in this codebase.
+export const INTERNATIONAL_ACADEMY_YEARS = 3; // fixed 3-year window, NOT variable like college's 4-year eligibility
+export const INTERNATIONAL_CLASS_SURPLUS_MULTIPLIER = 2; // mirrors HS_CLASS_SURPLUS_MULTIPLIER's population-control reasoning
+export const INTERNATIONAL_DRAFT_ROUNDS = 10; // mirrors DRAFT_ROUNDS, no doc guidance for a different count
+// Rolled once per year per currently-enrolled academy player (an annual
+// roll fits real recruiting better than a once-at-creation roll — see
+// engine/internationalAcademy.js's header). ~22% cumulative chance across
+// a full 3-year academy career.
+export const COLLEGE_ACCEPTANCE_TRIGGER_PROBABILITY = 0.08;
+// The doc's own two-step "Draft Day -> signing window -> Signing Day" — a
+// signing-WINDOW failure, not an active refusal (no NIL-vs-signing-bonus
+// tension exists internationally to motivate a refusal choice the way
+// college's does: "NIL system doesn't apply the same way to international
+// signings... signing is generally assumed"). A player who fails this
+// still has an academy year left falls back into the academy; one whose
+// 3-year window already closed exits straight to the international
+// free-agent pool.
+export const INTERNATIONAL_SIGNING_FAILURE_PROBABILITY = 0.05;
+// Shifted ~2 years younger than FREE_AGENT_RETIREMENT_AGE_CURVE — academy
+// exit is a FIXED ~20-21 age point (3 years from a 17-18 creation age),
+// unlike college graduation's more variable ~22-24. Kept as its own,
+// separate pool/curve per explicit user decision, not merged with
+// FREE_AGENT_RETIREMENT_AGE_CURVE's population above.
+export const INTERNATIONAL_FREE_AGENT_RETIREMENT_AGE_CURVE = Object.freeze([
+  { maxAge: 20, probability: 0.05 },
+  { maxAge: 22, probability: 0.25 },
+  { maxAge: 24, probability: 0.55 },
+  { maxAge: 26, probability: 0.85 },
+  { maxAge: Infinity, probability: 1.0 },
+]);
 
 // Injury severity tiers (injuries.md). DAY_TO_DAY has no real IL minimum
 // and rolls a small variable range; the rest carry a hard floor

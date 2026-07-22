@@ -115,8 +115,18 @@ function shiftBirthdateYears(player, yearsEarlier) {
  * This year's fresh incoming HS class, generated at a real surplus over
  * the pick count (see constants.js's HS_CLASS_SURPLUS_MULTIPLIER header for
  * why this is kept moderate, not real-MLB-scale). Reuses generatePlayer()
- * completely unmodified — no forced position needed, same reasoning as
- * Phase 2's draft class.
+ * completely unmodified except forcing birthNation to USA — Phase 4
+ * (engine/internationalAcademy.js) added a real international pipeline as
+ * the correct destination for non-USA-born amateurs, so a HS class letting
+ * `generatePlayer`'s internal `pickBirthNation` roll freely (as it did
+ * before this phase) would silently run e.g. a Dominican-born player
+ * through the domestic HS/college pipeline instead. `generatePlayer`
+ * spreads `options.overrides` last in its `createPlayer({...})` call, so
+ * `overrides.birthNation` wins over the internal roll; the small resulting
+ * wrinkle (heritageNations is still rolled against the pre-override,
+ * randomly-drawn nation) is accepted here as cosmetic — see
+ * engine/internationalAcademy.js's header for why the academy generator
+ * handles this differently.
  * @param {() => number} rng
  * @param {Date} asOfDate
  * @param {string} idPrefix - must be unique per season so ids never collide across years
@@ -124,7 +134,7 @@ function shiftBirthdateYears(player, yearsEarlier) {
  * @returns {object[]} Player[]
  */
 export function generateHsClass(rng, asOfDate, idPrefix, count = DRAFT_ROUNDS * TEAMS_COUNT * HS_CLASS_SURPLUS_MULTIPLIER) {
-  return generatePlayers(count, { rng, asOfDate, idPrefix });
+  return generatePlayers(count, { rng, asOfDate, idPrefix, overrides: { birthNation: 'USA' } });
 }
 
 /**

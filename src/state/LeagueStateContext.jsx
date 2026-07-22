@@ -190,6 +190,29 @@ export function LeagueStateProvider({ children }) {
     return count;
   }
 
+  // International Academy + International Draft (engine/internationalAcademy.js)
+  // — this season's real draft, already fully self-contained same as
+  // getDraftResult() above.
+  function getInternationalDraftResult() {
+    return state.internationalDraftResult;
+  }
+
+  // This season's pathway counts (new academy enrollments, college
+  // acceptances, signed/unsigned draft outcomes, free-agent exits/
+  // retirements).
+  function getInternationalSummary() {
+    return state.internationalDraftResult.internationalSummary;
+  }
+
+  // No draft-and-follow rights-holding exists for this pathway (see
+  // engine/internationalAcademy.js's header) — a signed player lands
+  // directly on an affiliate roster, already visible via the Farm System's
+  // existing rows. This is season-scoped, not a running "still developing
+  // under this team" count like getTeamCollegeRightsCount.
+  function getTeamInternationalSigningsCount(teamId) {
+    return state.internationalDraftResult.selections.filter((s) => s.outcome === 'signed' && s.teamId === teamId).length;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -312,6 +335,9 @@ export function LeagueStateProvider({ children }) {
     getDraftResult,
     getCollegeSummary,
     getTeamCollegeRightsCount,
+    getInternationalDraftResult,
+    getInternationalSummary,
+    getTeamInternationalSigningsCount,
   };
 
   return <LeagueStateContext.Provider value={value}>{children}</LeagueStateContext.Provider>;
