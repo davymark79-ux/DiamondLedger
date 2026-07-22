@@ -1,6 +1,12 @@
 // The real 50-team league's LIVE, advanceable season state — persisted to
-// localStorage so progress survives a reload (explicit user choice; the
+// IndexedDB so progress survives a reload (explicit user choice; the
 // simpler alternative was resetting to season 1 on every reload).
+// Originally localStorage-backed; migrated to IndexedDB (see
+// data/indexedDbStorage.js's header) once the College System + International
+// Academy populations pushed the real, serialized state size well past
+// localStorage's ~5-10MB-per-origin quota — those populations are
+// retirement-BOUNDED, not capped, so they keep growing every season by
+// design and localStorage could never keep up long-term.
 //
 // This module owns the pure state-transition + persistence logic; the React
 // wiring (Context/hook, the "Simulate Next Season" action, per-page getters)
@@ -19,7 +25,14 @@
 // (matching this league's original single-season seed, 20260201, so a
 // fresh browser with no saved state sees identical season-1 values to
 // before this feature existed), and there's nothing rng-related to
-// serialize for persistence either.
+// persist either.
+//
+// IndexedDB has no synchronous read API, so unlike the old localStorage
+// version, `initialLeagueState` below can no longer eagerly check for a
+// saved game at module-load time — it's now always a fresh, deterministic
+// season 1. The real "was there a saved game" check happens asynchronously
+// in src/state/LeagueStateContext.jsx's mount effect, which swaps in a real
+// save (if one exists) via dispatch once IndexedDB resolves.
 
 import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
 import { affiliateClubs, initialAffiliateRosterByClubId } from './realAffiliates.js';
@@ -37,9 +50,14 @@ import {
   runInternationalPathway,
 } from '../engine/internationalAcademy.js';
 import { createRng } from '../models/generation/random.js';
+import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v7'; // bumped from v6 — International Academy + International Draft (Phase 4 of the Path to Draft/Minors/Free-Agency arc) added academyEnrollmentById/academyPlayersById/internationalFreeAgentPoolById + a new internationalDraftResult field to the state shape; an old v1-v6 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+// The old localStorage key (v1-v7, superseded by the IndexedDB migration
+// above) — exported purely so src/state/LeagueStateContext.jsx can do a
+// one-time best-effort cleanup of any orphaned entry left over from before
+// this migration. Not read from anymore; nothing migrates its contents.
+export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -160,138 +178,26 @@ function seasonRngForNumber(seasonNumber) {
   return createRng(SEASON_RNG_BASE_SEED + (seasonNumber - 1));
 }
 
-// ===== Map <-> plain-object conversion + Infinity-safe JSON (de)serialization =====
-// Real, not theoretical: injuryStatusById's gamesRemaining is a genuine
-// Infinity for season-/career-ending injuries (engine/injuries.js) — a
-// naive JSON.stringify silently turns that into null, which would make a
-// permanently-out player misread as recovering after a reload.
+// ===== Persistence (IndexedDB — see data/indexedDbStorage.js) =====
+// Stored via the structured-clone algorithm, which natively handles Maps,
+// Dates, Infinity, and NaN (e.g. injuryStatusById's gamesRemaining is a
+// genuine Infinity for season-/career-ending injuries, engine/injuries.js)
+// — no serialize/deserialize step needed, the live state shape is stored
+// and retrieved as-is.
 
-const INFINITY_SENTINEL = '__Infinity__';
-const NEG_INFINITY_SENTINEL = '__-Infinity__';
-const NAN_SENTINEL = '__NaN__';
-
-function jsonReplacer(_key, value) {
-  if (value === Infinity) return INFINITY_SENTINEL;
-  if (value === -Infinity) return NEG_INFINITY_SENTINEL;
-  if (typeof value === 'number' && Number.isNaN(value)) return NAN_SENTINEL;
-  return value;
-}
-
-function jsonReviver(_key, value) {
-  if (value === INFINITY_SENTINEL) return Infinity;
-  if (value === NEG_INFINITY_SENTINEL) return -Infinity;
-  if (value === NAN_SENTINEL) return NaN;
-  return value;
-}
-
-function mapToObj(map) {
-  return Object.fromEntries(map);
-}
-
-function objToMap(obj) {
-  return new Map(Object.entries(obj ?? {}));
-}
-
-function serializeSeasonResult(seasonResult) {
-  return {
-    standingsById: mapToObj(seasonResult.standingsById),
-    injuryStatusById: mapToObj(seasonResult.injuryStatusById),
-    consecutiveGamesPlayedById: mapToObj(seasonResult.consecutiveGamesPlayedById),
-    streakStateById: mapToObj(seasonResult.streakStateById),
-    managerAssignmentById: mapToObj(seasonResult.managerAssignmentById),
-    managerNameById: mapToObj(seasonResult.managerNameById),
-    firings: seasonResult.firings,
-    results: seasonResult.results,
-  };
-}
-
-function deserializeSeasonResult(plain) {
-  return {
-    standingsById: objToMap(plain.standingsById),
-    injuryStatusById: objToMap(plain.injuryStatusById),
-    consecutiveGamesPlayedById: objToMap(plain.consecutiveGamesPlayedById),
-    streakStateById: objToMap(plain.streakStateById),
-    managerAssignmentById: objToMap(plain.managerAssignmentById),
-    managerNameById: objToMap(plain.managerNameById),
-    firings: plain.firings,
-    results: plain.results,
-  };
-}
-
-function serializeState(state) {
-  return {
-    seasonNumber: state.seasonNumber,
-    asOfDate: state.asOfDate.toISOString(),
-    rosterByTeamId: mapToObj(state.rosterByTeamId),
-    managerByTeamId: mapToObj(state.managerByTeamId),
-    roleStateById: mapToObj(state.roleStateById),
-    tierByTeamId: mapToObj(state.tierByTeamId),
-    divisionByTeamId: mapToObj(state.divisionByTeamId),
-    promotionRelegationSwaps: state.promotionRelegationSwaps,
-    playoffResult: state.playoffResult, // plain, JSON-native already — no Maps inside it
-    seasonResult: serializeSeasonResult(state.seasonResult),
-    // Minor League System — kept lean on purpose (see engine/minorLeagues.js's
-    // header): only current roster composition + standings persist, no
-    // per-game affiliate box scores/injuries/fatigue/streak state.
-    affiliateRosterByClubId: mapToObj(state.affiliateRosterByClubId),
-    affiliateStandingsById: mapToObj(state.affiliateStandingsById),
-    draftResult: state.draftResult, // plain, JSON-native already — no Maps inside it
-    // College System — real, growing (but retirement-bounded, see
-    // engine/college.js's header) persistent population.
-    collegeEnrollmentById: mapToObj(state.collegeEnrollmentById),
-    collegePlayersById: mapToObj(state.collegePlayersById),
-    freeAgentPoolById: mapToObj(state.freeAgentPoolById),
-    // International Academy + International Draft (Phase 4) — a real,
-    // separate population/pool from College's own (see
-    // engine/internationalAcademy.js's header for why it's kept separate).
-    academyEnrollmentById: mapToObj(state.academyEnrollmentById),
-    academyPlayersById: mapToObj(state.academyPlayersById),
-    internationalFreeAgentPoolById: mapToObj(state.internationalFreeAgentPoolById),
-    internationalDraftResult: state.internationalDraftResult, // plain, JSON-native already — no Maps inside it
-  };
-}
-
-function deserializeState(plain) {
-  return {
-    seasonNumber: plain.seasonNumber,
-    asOfDate: new Date(plain.asOfDate),
-    rosterByTeamId: objToMap(plain.rosterByTeamId),
-    managerByTeamId: objToMap(plain.managerByTeamId),
-    roleStateById: objToMap(plain.roleStateById),
-    tierByTeamId: objToMap(plain.tierByTeamId),
-    divisionByTeamId: objToMap(plain.divisionByTeamId),
-    promotionRelegationSwaps: plain.promotionRelegationSwaps,
-    playoffResult: plain.playoffResult,
-    seasonResult: deserializeSeasonResult(plain.seasonResult),
-    affiliateRosterByClubId: objToMap(plain.affiliateRosterByClubId),
-    affiliateStandingsById: objToMap(plain.affiliateStandingsById),
-    draftResult: plain.draftResult,
-    collegeEnrollmentById: objToMap(plain.collegeEnrollmentById),
-    collegePlayersById: objToMap(plain.collegePlayersById),
-    freeAgentPoolById: objToMap(plain.freeAgentPoolById),
-    academyEnrollmentById: objToMap(plain.academyEnrollmentById),
-    academyPlayersById: objToMap(plain.academyPlayersById),
-    internationalFreeAgentPoolById: objToMap(plain.internationalFreeAgentPoolById),
-    internationalDraftResult: plain.internationalDraftResult,
-  };
-}
-
-/** Persists the full live season state — call after every advanceToNextSeason(). Never throws (a full/blocked/absent localStorage — e.g. a Node script importing this module — just means progress won't survive a reload, not a crash). */
-export function saveState(state) {
-  if (typeof localStorage === 'undefined') return;
+/** Persists the full live season state — call after every advanceToNextSeason(). Never throws (a full/blocked/absent IndexedDB — e.g. a Node script importing this module — just means progress won't survive a reload, not a crash). */
+export async function saveState(state) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState(state), jsonReplacer));
+    await saveLeagueState(state);
   } catch (err) {
-    console.warn('Failed to save league state to localStorage:', err);
+    console.warn('Failed to save league state to IndexedDB:', err);
   }
 }
 
-function loadState() {
-  if (typeof localStorage === 'undefined') return null;
+/** @returns {Promise<object|null>} a saved state if one exists, otherwise null. Never throws. */
+export async function loadStateAsync() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return deserializeState(JSON.parse(raw, jsonReviver));
+    return await loadLeagueState();
   } catch (err) {
     console.warn('Failed to load saved league state, starting fresh:', err);
     return null;
@@ -383,10 +289,10 @@ function computeFreshSeason1State() {
   };
 }
 
-/** Clears any saved progress and returns a fresh season-1 state. */
-export function resetToSeason1() {
+/** Clears any saved progress and returns a fresh season-1 state. @returns {Promise<object>} */
+export async function resetToSeason1() {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    await deleteLeagueState();
   } catch (err) {
     console.warn('Failed to clear saved league state:', err);
   }
@@ -394,12 +300,15 @@ export function resetToSeason1() {
 }
 
 /**
- * The state the app boots with — a saved season if one exists, otherwise a
- * fresh season 1. Computed exactly once at module load (eager, outside
- * React entirely) so there's no lazy initializer or effect for StrictMode
- * to double-invoke.
+ * The state the app boots with — ALWAYS a fresh, deterministic season 1
+ * (IndexedDB has no synchronous read API, so a saved game can no longer be
+ * checked for at this eager, outside-React module-load point the way the
+ * old localStorage-backed version could). Computed exactly once at module
+ * load so there's no lazy initializer for StrictMode to double-invoke. A
+ * real saved game, if one exists, is loaded asynchronously and swapped in
+ * by src/state/LeagueStateContext.jsx's mount effect via `loadStateAsync()`.
  */
-export const initialLeagueState = loadState() ?? computeFreshSeason1State();
+export const initialLeagueState = computeFreshSeason1State();
 
 /**
  * One offseason (growth/retirement/replenishment for every team) plus the

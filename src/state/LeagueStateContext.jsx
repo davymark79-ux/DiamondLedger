@@ -4,10 +4,18 @@
 // data/season.js's old static exports now calls useLeagueState() instead;
 // the function names/signatures match 1:1 so the migration is mechanical.
 
-import { createContext, useContext, useReducer, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useReducer, useState, useEffect, useCallback, useMemo } from 'react';
 import { teams as staticTeams } from '../data/realLeague.js';
 import { affiliateClubsById } from '../data/realAffiliates.js';
-import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState, applyLiveOverrides } from '../data/season.js';
+import {
+  initialLeagueState,
+  advanceToNextSeason,
+  resetToSeason1,
+  saveState,
+  loadStateAsync,
+  applyLiveOverrides,
+  LEGACY_LOCAL_STORAGE_KEY,
+} from '../data/season.js';
 import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
 import { getPromotionRelegationPairing } from '../models/League.js';
@@ -53,6 +61,36 @@ function buildPlayersById(rosterByTeamId) {
 export function LeagueStateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialLeagueState);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  // `initialLeagueState` is always a fresh season 1 (data/season.js's
+  // IndexedDB migration removed the old synchronous localStorage read at
+  // module-load time — see its header). The real "was there a saved game"
+  // check happens here instead, once, on mount: if IndexedDB has a real
+  // save, swap it in via dispatch before ever rendering `children`, so no
+  // page sees a flash of fresh season-1 data that then jumps to a real
+  // save. Safe under StrictMode's dev-mode double-invoke (the `cancelled`
+  // flag just drops a second in-flight resolution's result — same data
+  // either way, so even without the guard this would be harmless, but the
+  // guard avoids a wasted dispatch after unmount).
+  useEffect(() => {
+    let cancelled = false;
+    loadStateAsync().then((saved) => {
+      if (cancelled) return;
+      if (saved) dispatch({ type: 'REPLACE', payload: saved });
+      // Best-effort hygiene only — reclaims quota space from the old
+      // localStorage-backed version; nothing reads this key anymore.
+      try {
+        localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
+      } catch {
+        // ignore — non-critical cleanup
+      }
+      setIsHydrating(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // teams' identity fields (city/nickname/marketSize/ownership/leagueId)
   // never change season-to-season, but tier and division now do
@@ -76,9 +114,9 @@ export function LeagueStateProvider({ children }) {
   const advanceSeason = useCallback(() => {
     if (isSimulating) return;
     setIsSimulating(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       const next = advanceToNextSeason(state);
-      saveState(next);
+      await saveState(next);
       dispatch({ type: 'REPLACE', payload: next });
       setIsSimulating(false);
     }, 0);
@@ -87,8 +125,8 @@ export function LeagueStateProvider({ children }) {
   const resetSeason = useCallback(() => {
     if (isSimulating) return;
     setIsSimulating(true);
-    setTimeout(() => {
-      const fresh = resetToSeason1();
+    setTimeout(async () => {
+      const fresh = await resetToSeason1();
       dispatch({ type: 'REPLACE', payload: fresh });
       setIsSimulating(false);
     }, 0);
@@ -339,6 +377,18 @@ export function LeagueStateProvider({ children }) {
     getInternationalSummary,
     getTeamInternationalSigningsCount,
   };
+
+  // Blocks rendering `children` (and every page's useLeagueState() calls)
+  // until the IndexedDB save check above resolves — see the hydration
+  // effect's comment. All hooks above are called unconditionally either
+  // way, so this conditional return is Rules-of-Hooks safe.
+  if (isHydrating) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-field text-ledger/60 text-sm">
+        Loading your league… this may take a moment.
+      </div>
+    );
+  }
 
   return <LeagueStateContext.Provider value={value}>{children}</LeagueStateContext.Provider>;
 }
