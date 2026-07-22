@@ -49,6 +49,7 @@ import { buildSeasonSchedule, simulateSeason, groupTeamsForScheduling, BATTING_S
 import { advanceDevelopmentPeriodWithReassignment } from './development.js';
 import { rollRetirement, rollManagerRetirement } from './retirement.js';
 import { rollWriterRetirement } from './writerRetirement.js';
+import { promoteAndBackfill } from './minorLeagues.js';
 import { generateEstablishedPlayer } from '../models/generation/playerGenerator.js';
 import { generateManager } from '../models/generation/managerGenerator.js';
 import { generateWriter } from '../models/generation/writerGenerator.js';
@@ -77,7 +78,17 @@ export function simulateOneSeason(teams, getTeamRoster, getTeamManager, rng, gam
   return { schedule, seasonResult };
 }
 
-function advanceOnePlayer(player, team, roleStateById, rng, asOfDate) {
+// Retiree replacement: a real call-up from the org's own AAA affiliate
+// (promoteAndBackfill, engine/minorLeagues.js), which cascades a real
+// AAA<-AA<-A<-Rookie backfill too — only falling back to today's thin-air
+// generateEstablishedPlayer() when the cascade genuinely has no eligible
+// fit anywhere in the chain (early seasons, thin affiliate rosters, or no
+// affiliateRosterByClubId supplied at all). `affiliateRosterByClubId`
+// defaults to an empty Map so every existing caller that doesn't pass one
+// (every validate script, simulateLeagueHistory's own offline Hall-of-Fame
+// pipeline) sees promoteAndBackfill immediately return null and falls
+// straight back to exactly today's behavior — zero change for them.
+function advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId) {
   const priorRoleState = roleStateById.get(player.id);
   const { player: grown, roleState } = advanceDevelopmentPeriodWithReassignment(player, priorRoleState, { rng, asOfDate });
   roleStateById.set(player.id, roleState);
@@ -87,7 +98,8 @@ function advanceOnePlayer(player, team, roleStateById, rng, asOfDate) {
   }
 
   roleStateById.delete(player.id);
-  const replacement = generateEstablishedPlayer({
+  const calledUp = promoteAndBackfill(team, grown.primaryPosition, affiliateRosterByClubId, rng, asOfDate);
+  const replacement = calledUp ?? generateEstablishedPlayer({
     rng,
     position: grown.primaryPosition,
     qualityRange: qualityRangeForTeam(team),
@@ -97,11 +109,11 @@ function advanceOnePlayer(player, team, roleStateById, rng, asOfDate) {
   return { player: replacement, retiredPlayerId: grown.id };
 }
 
-function advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate) {
+function advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId) {
   const retiredPlayerIds = [];
   function advanceGroup(players) {
     return players.map((player) => {
-      const result = advanceOnePlayer(player, team, roleStateById, rng, asOfDate);
+      const result = advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId);
       if (result.retiredPlayerId) retiredPlayerIds.push(result.retiredPlayerId);
       return result.player;
     });
@@ -141,9 +153,10 @@ function advanceManagerForTeam(manager, team, rng, asOfDate) {
  * @param {Map<string, object>} roleStateById - positionReassignment.js hysteresis state, owned across seasons by the caller
  * @param {Date} asOfDate
  * @param {() => number} rng
+ * @param {Map<string, object>} [affiliateRosterByClubId] - Minor League System (engine/minorLeagues.js) sectioned rosters by affiliate club id, mutated in place by the call-up cascade and carried forward by the caller across seasons — same ownership contract as roleStateById. Defaults to an empty Map (every retiree replacement falls back to thin-air generation, today's exact behavior) for callers that don't have a Minor League System wired up.
  * @returns {{rosterByTeamId: Map, managerByTeamId: Map, retiredPlayerIds: string[], retiredManagerIds: string[]}}
  */
-export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleStateById, asOfDate, rng) {
+export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleStateById, asOfDate, rng, affiliateRosterByClubId = new Map()) {
   const newRosterByTeamId = new Map();
   const newManagerByTeamId = new Map();
   const retiredPlayerIds = [];
@@ -151,7 +164,7 @@ export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleSta
 
   for (const team of teams) {
     const roster = rosterByTeamId.get(team.id);
-    const { roster: advancedRoster, retiredPlayerIds: teamRetirees } = advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate);
+    const { roster: advancedRoster, retiredPlayerIds: teamRetirees } = advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId);
     newRosterByTeamId.set(team.id, advancedRoster);
     retiredPlayerIds.push(...teamRetirees);
 

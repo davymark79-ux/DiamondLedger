@@ -6,6 +6,7 @@
 
 import { createContext, useContext, useReducer, useState, useCallback, useMemo } from 'react';
 import { teams as staticTeams } from '../data/realLeague.js';
+import { affiliateClubsById } from '../data/realAffiliates.js';
 import { initialLeagueState, advanceToNextSeason, resetToSeason1, saveState, applyLiveOverrides } from '../data/season.js';
 import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from '../engine/season.js';
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
@@ -147,6 +148,28 @@ export function LeagueStateProvider({ children }) {
     return state.seasonResult.firings.filter((f) => f.teamId === teamId);
   }
 
+  // Minor League System (engine/minorLeagues.js) — affiliateClubsById is
+  // static identity data (data/realAffiliates.js), rosters/standings are
+  // live state that evolves every season via the call-up cascade.
+  function getAffiliateClub(teamId, level) {
+    return affiliateClubsById.get(`${teamId}-${level}`) ?? null;
+  }
+
+  function getAffiliateRoster(clubId) {
+    return state.affiliateRosterByClubId.get(clubId) ?? { lineup: [], rotation: [], bullpen: [], bench: [] };
+  }
+
+  function getAffiliateStandings(clubId) {
+    return state.affiliateStandingsById.get(clubId) ?? { wins: 0, losses: 0 };
+  }
+
+  // Domestic Draft (engine/draft.js) — this season's real draft, already
+  // fully self-contained (selections carry player display fields directly,
+  // see data/season.js's runDraft) so no extra lookup is needed here.
+  function getDraftResult() {
+    return state.draftResult;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -263,6 +286,10 @@ export function LeagueStateProvider({ children }) {
     getTeamManagerChanges,
     getLeagueWireEvents,
     buildMatchup,
+    getAffiliateClub,
+    getAffiliateRoster,
+    getAffiliateStandings,
+    getDraftResult,
   };
 
   return <LeagueStateContext.Provider value={value}>{children}</LeagueStateContext.Provider>;

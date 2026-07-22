@@ -22,13 +22,57 @@
 // serialize for persistence either.
 
 import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
+import { affiliateClubs, initialAffiliateRosterByClubId } from './realAffiliates.js';
 import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
+import { simulateMinorLeagueSeasons } from '../engine/minorLeagues.js';
 import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDivisionSwaps } from '../engine/promotionRelegation.js';
 import { simulatePlayoffs } from '../engine/playoffs.js';
+import { computeDraftOrder, buildDraftPicks, generateDraftClass, resolveDraft, assignSignedDraftees } from '../engine/draft.js';
 import { createRng } from '../models/generation/random.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v3'; // bumped from v2 — playoffs added divisionByTeamId/playoffResult to the state shape; an old v1/v2 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+const STORAGE_KEY = 'diamondLedger.leagueState.v5'; // bumped from v4 — the Domestic Draft (Phase 2 of the Path to Draft/Minors/Free-Agency arc) added draftResult to the state shape; an old v1-v4 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+
+/**
+ * Runs this season's draft (using ITS OWN just-finished standings/playoff
+ * result/results — same data promotion/relegation reads) and signs every
+ * pick straight into the drafting club's Rookie roster. Mutates
+ * `affiliateRosterByClubId` in place, same ownership contract as
+ * engine/leagueProgression.js's advanceOffseason (roleStateById) and
+ * engine/minorLeagues.js's promoteAndBackfill.
+ * @param {object[]} currentTeams
+ * @param {Map<string, {wins: number, losses: number}>} standingsById
+ * @param {object} playoffResult
+ * @param {object[]} results
+ * @param {Map<string, object>} affiliateRosterByClubId
+ * @param {number} seasonNumber - the season whose results are driving this draft (for a unique draft-class id prefix)
+ * @param {() => number} rng
+ * @returns {{ seasonNumber: number, picks: object[], selections: object[] }} selections are enriched with
+ *   {firstName, lastName, primaryPosition, isPitcher} directly (not just a playerId) — draftResult needs
+ *   to stay a fully self-contained, JSON-native display source for the UI, since the draft class itself
+ *   isn't persisted separately.
+ */
+function runDraft(currentTeams, standingsById, playoffResult, results, affiliateRosterByClubId, seasonNumber, rng) {
+  const { round1Order, regularOrder } = computeDraftOrder(currentTeams, standingsById, playoffResult, results, rng);
+  const picks = buildDraftPicks(round1Order, regularOrder);
+  const draftClass = generateDraftClass(rng, new Date(), `draft-s${seasonNumber}`);
+  const { selections } = resolveDraft(picks, draftClass);
+  assignSignedDraftees(selections, draftClass, affiliateRosterByClubId);
+
+  const draftClassById = new Map(draftClass.map((p) => [p.id, p]));
+  const enrichedSelections = selections.map((selection) => {
+    const player = draftClassById.get(selection.playerId);
+    return {
+      ...selection,
+      firstName: player.firstName,
+      lastName: player.lastName,
+      primaryPosition: player.primaryPosition,
+      isPitcher: player.isPitcher,
+    };
+  });
+
+  return { seasonNumber, picks, selections: enrichedSelections };
+}
 
 /**
  * Applies each team's CURRENT (live, possibly promoted/relegated) tier and
@@ -125,6 +169,12 @@ function serializeState(state) {
     promotionRelegationSwaps: state.promotionRelegationSwaps,
     playoffResult: state.playoffResult, // plain, JSON-native already — no Maps inside it
     seasonResult: serializeSeasonResult(state.seasonResult),
+    // Minor League System — kept lean on purpose (see engine/minorLeagues.js's
+    // header): only current roster composition + standings persist, no
+    // per-game affiliate box scores/injuries/fatigue/streak state.
+    affiliateRosterByClubId: mapToObj(state.affiliateRosterByClubId),
+    affiliateStandingsById: mapToObj(state.affiliateStandingsById),
+    draftResult: state.draftResult, // plain, JSON-native already — no Maps inside it
   };
 }
 
@@ -140,6 +190,9 @@ function deserializeState(plain) {
     promotionRelegationSwaps: plain.promotionRelegationSwaps,
     playoffResult: plain.playoffResult,
     seasonResult: deserializeSeasonResult(plain.seasonResult),
+    affiliateRosterByClubId: objToMap(plain.affiliateRosterByClubId),
+    affiliateStandingsById: objToMap(plain.affiliateStandingsById),
+    draftResult: plain.draftResult,
   };
 }
 
@@ -168,6 +221,7 @@ function loadState() {
 function computeFreshSeason1State() {
   const rosterByTeamId = new Map(teams.map((t) => [t.id, getTeamRoster(t.id)]));
   const managerByTeamId = new Map(teams.map((t) => [t.id, getTeamManager(t.id)]));
+  const affiliateRosterByClubId = initialAffiliateRosterByClubId();
   const rng = seasonRngForNumber(1);
   const { seasonResult } = simulateOneSeason(
     teams,
@@ -175,6 +229,7 @@ function computeFreshSeason1State() {
     (id) => managerByTeamId.get(id),
     rng
   );
+  const { standingsById: affiliateStandingsById } = simulateMinorLeagueSeasons(affiliateClubs, affiliateRosterByClubId, rng);
   const playoffResult = simulatePlayoffs(
     teams,
     seasonResult.standingsById,
@@ -185,6 +240,14 @@ function computeFreshSeason1State() {
     seasonResult.streakStateById,
     rng
   );
+
+  // Season 1 gets a real draft too, same as playoffs — using its own
+  // just-finished standings/playoff result. Draftees are signed straight
+  // into affiliateRosterByClubId (mutated in place), so they show up
+  // starting with season 2's own minor-league sim, not season 1's (which
+  // already ran, above).
+  const draftResult = runDraft(teams, seasonResult.standingsById, playoffResult, seasonResult.results, affiliateRosterByClubId, 1, rng);
+
   return {
     seasonNumber: 1,
     asOfDate: new Date(),
@@ -196,6 +259,9 @@ function computeFreshSeason1State() {
     promotionRelegationSwaps: [], // nothing to promote/relegate yet — no prior season exists to evaluate
     playoffResult,
     seasonResult,
+    affiliateRosterByClubId,
+    affiliateStandingsById,
+    draftResult,
   };
 }
 
@@ -247,13 +313,15 @@ export function advanceToNextSeason(state) {
   const teamsForNextSeason = applyLiveOverrides(teams, tierByTeamId, divisionByTeamId);
 
   const rng = seasonRngForNumber(seasonNumber);
+
   const { rosterByTeamId, managerByTeamId } = advanceOffseason(
     teamsForNextSeason,
     state.rosterByTeamId,
     state.seasonResult.managerAssignmentById,
     state.roleStateById, // mutated in place by advanceOffseason — the same Map instance is carried forward, per its own "owned across seasons by the caller" contract
     asOfDate,
-    rng
+    rng,
+    state.affiliateRosterByClubId // also mutated in place by the call-up cascade — same ownership contract as roleStateById
   );
 
   const { seasonResult } = simulateOneSeason(
@@ -262,6 +330,12 @@ export function advanceToNextSeason(state) {
     (id) => managerByTeamId.get(id),
     rng
   );
+
+  // Minor League seasons for the year just entered — run AFTER the call-up
+  // cascade above (so this season's affiliate rosters already reflect any
+  // promotions/backfills from the offseason that just happened), same
+  // "compute this season's own state" placement as playoffs below.
+  const { standingsById: affiliateStandingsById } = simulateMinorLeagueSeasons(affiliateClubs, state.affiliateRosterByClubId, rng);
 
   // Playoffs are THIS new season's own culmination — computed from its own
   // just-finished standings, not the previous season's (that's what
@@ -277,6 +351,24 @@ export function advanceToNextSeason(state) {
     rng
   );
 
+  // The draft is likewise THIS new season's own culmination — using the
+  // standings/playoff result just computed above, NOT state's (that data
+  // already drove the draft that fed THIS season's own incoming rookies,
+  // back when this state was first produced — reusing it again here would
+  // silently run the same season's results through the draft twice).
+  // Draftees sign straight into affiliateRosterByClubId (mutated in place,
+  // same instance carried forward) so they're real organizational depth by
+  // the time the NEXT transition's call-up cascade/minor-league sim runs.
+  const draftResult = runDraft(
+    teamsForNextSeason,
+    seasonResult.standingsById,
+    playoffResult,
+    seasonResult.results,
+    state.affiliateRosterByClubId,
+    seasonNumber,
+    rng
+  );
+
   return {
     seasonNumber,
     asOfDate,
@@ -288,5 +380,8 @@ export function advanceToNextSeason(state) {
     promotionRelegationSwaps,
     playoffResult,
     seasonResult,
+    affiliateRosterByClubId: state.affiliateRosterByClubId,
+    affiliateStandingsById,
+    draftResult,
   };
 }

@@ -56,7 +56,13 @@ export function groupTeamsForScheduling(teams) {
 // more than the target (up to groupSize - 2) — an accepted approximation,
 // not engineered away (see validate-season.mjs, which checks for exactly
 // this tolerance rather than an exact count).
-function buildGroupSchedule(teams, targetGamesPerTeam, rng) {
+//
+// Exported — engine/minorLeagues.js reuses this exact single-group scheduler
+// directly (a minor-league level's own custom grouping — one combined
+// 50-club group for AAA/AA/A, four regional-hub groups for Rookie — doesn't
+// match groupTeamsForScheduling()'s tier+leagueId grouping above, but the
+// per-group round-robin builder underneath it is identical reuse).
+export function buildGroupSchedule(teams, targetGamesPerTeam, rng) {
   const pairs = [];
   for (let i = 0; i < teams.length; i++) {
     for (let j = i + 1; j < teams.length; j++) {

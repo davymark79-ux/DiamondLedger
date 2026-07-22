@@ -90,10 +90,14 @@ export const FAN_OWNERSHIP_MIN_FAN_SHARE = 0.51;
 
 // Development period a player's current rating is growing through — feeds the
 // Growth Model's variance std. dev. (below). HS/College precede a pro org;
-// A/AA/AAA/MLB are minor/major-league levels.
+// Rookie/A/AA/AAA/MLB are minor/major-league levels. ROOKIE added for the
+// Minor League System (minor-leagues.md/rookie-league.md) — sits between
+// HS and COLLEGE in variance below, since Rookie ball's population skews
+// HS-signee-heavy (rookie-league.md).
 export const DEVELOPMENT_LEVELS = Object.freeze({
   HS: 'HS',
   COLLEGE: 'COLLEGE',
+  ROOKIE: 'ROOKIE',
   A: 'A',
   AA: 'AA',
   AAA: 'AAA',
@@ -105,11 +109,67 @@ export const DEVELOPMENT_LEVELS = Object.freeze({
 export const VARIANCE_STD_DEV_BY_LEVEL = Object.freeze({
   [DEVELOPMENT_LEVELS.HS]: 8,
   [DEVELOPMENT_LEVELS.COLLEGE]: 7,
+  [DEVELOPMENT_LEVELS.ROOKIE]: 7.5,
   [DEVELOPMENT_LEVELS.A]: 5.5,
   [DEVELOPMENT_LEVELS.AA]: 3.5,
   [DEVELOPMENT_LEVELS.AAA]: 2,
   [DEVELOPMENT_LEVELS.MLB]: 1,
 });
+
+// Minor League System (minor-leagues.md/rookie-league.md) — the Path to
+// Draft/Minors/Free-Agency arc's Phase 1. Promotion order for the call-up
+// cascade (engine/minorLeagues.js's promoteAndBackfill): index 0 is
+// closest to the majors.
+export const MINOR_LEAGUE_LEVELS_ORDER = Object.freeze(['AAA', 'AA', 'A', 'ROOKIE']);
+
+// Quality bands (RATING_SCALE anchors, same "needs real playtesting" tone as
+// ROSTER_QUALITY_BY_TIER in models/seed/rosterSeed.js) — deliberately all
+// below TIERS.MLB2's [25, 52] band, descending toward Rookie ball. Used both
+// for initial affiliate roster generation (models/seed/affiliateSeed.js) and
+// the call-up cascade's fresh-fill fallback (engine/minorLeagues.js) when no
+// eligible prospect exists at a given level. NOTE: every level currently
+// reuses generateEstablishedPlayer()'s 21-37 age range — a real Rookie/A-ball
+// age distribution (17-23-ish HS/international signees) isn't modeled yet,
+// since nothing feeds Rookie ball with genuinely young signees until the
+// draft/international-pathway phases of this arc get built. Flagged, not
+// faked.
+export const MINOR_LEAGUE_QUALITY_BANDS = Object.freeze({
+  AAA: [25, 45],
+  AA: [21, 41],
+  A: [14, 34],
+  ROOKIE: [10, 30],
+});
+
+// Season lengths per level (minor-leagues.md), scaled off the majors' own
+// 150-game season the same way the doc derives them. Rookie's is a rough
+// placeholder shape (short, per rookie-league.md) — exact game count isn't
+// specced there.
+export const MINOR_LEAGUE_SEASON_LENGTHS = Object.freeze({
+  AAA: 139,
+  AA: 128,
+  A: 122,
+  ROOKIE: 45,
+});
+
+// rookie-league.md's four regional hubs — Rookie affiliates are grouped and
+// scheduled within their own hub only, unlike AAA/AA/A (one combined
+// 50-club group each). Assignment of the 50 parent clubs across hubs is a
+// round-robin placeholder (models/generation/affiliateNamePools.js) — the
+// doc itself leaves real geographic assignment as an open follow-up task.
+export const ROOKIE_REGIONAL_HUBS = Object.freeze(['Florida', 'Texas', 'Arizona', 'Southern California']);
+
+// Domestic (HS) Draft — Phase 2 of the "Path to Draft, Minors & Free
+// Agency" arc (player-pathway.md). All placeholders, needs real
+// playtesting like every other numeric constant in this codebase.
+export const DRAFT_ROUNDS = 10; // real MLB currently drafts 20 rounds; kept smaller for a first pass
+export const DRAFT_LOTTERY_PICKS = 2; // current real NHL format — only the top 2 slots are actually lottery-drawn
+export const DRAFT_LOTTERY_MAX_RISE = 10; // a team can't rise more than this many spots from its natural reverse-standings rank
+// Anti-tanking bonus (engine/draft.js) — extra lottery-only equity for a
+// team's win% in games AFTER it's mathematically eliminated, on top of the
+// base worse-record-better-odds weight. Added per explicit user request:
+// a unified draft with no such bonus gives MLB2 clubs especially zero
+// incentive not to tank once eliminated.
+export const DRAFT_ELIMINATION_BONUS_SCALE = 0.5;
 
 // Injury severity tiers (injuries.md). DAY_TO_DAY has no real IL minimum
 // and rolls a small variable range; the rest carry a hard floor

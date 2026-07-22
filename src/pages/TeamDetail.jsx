@@ -4,7 +4,7 @@ import TierBadge from '../components/TierBadge';
 import { useLeagueState } from '../state/LeagueStateContext.jsx';
 import { getAge } from '../models/Player';
 import { getManagerAge } from '../models/Manager';
-import { HOT_COLD_TIERS, MANAGER_SLIDER_NAMES, MANAGER_ORIGINS } from '../models/constants';
+import { HOT_COLD_TIERS, MANAGER_SLIDER_NAMES, MANAGER_ORIGINS, MINOR_LEAGUE_LEVELS_ORDER } from '../models/constants';
 import { NATION_CODES } from '../models/generation/nationalityPools';
 
 function InjuryTag({ playerId }) {
@@ -303,6 +303,37 @@ function ManagerCard({ manager, changes = [] }) {
   );
 }
 
+// Minor League System (engine/minorLeagues.js) — a compact organizational
+// summary, same visual convention as ManagerCard. MINOR_LEAGUE_LEVELS_ORDER
+// is AAA-first (closest to the majors); reversed here so display reads
+// AAA-down-to-Rookie, the real-world "how close to the show" convention.
+// No per-affiliate roster drill-down yet — a reasonable follow-up once a
+// later phase of this arc needs it, not required to prove this phase works.
+function FarmSystemCard({ teamId }) {
+  const { getAffiliateClub, getAffiliateStandings } = useLeagueState();
+  const levels = [...MINOR_LEAGUE_LEVELS_ORDER].reverse();
+
+  return (
+    <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
+      <div className="px-4 py-2 text-[11px] uppercase tracking-wider text-brass-bright/80 border-b border-field-line">
+        Farm System
+      </div>
+      {levels.map((level) => {
+        const club = getAffiliateClub(teamId, level);
+        if (!club) return null;
+        const record = getAffiliateStandings(club.id);
+        return (
+          <div key={level} className="grid grid-cols-[3rem_1fr_4rem] px-4 py-2 text-sm border-b border-field-line last:border-b-0">
+            <span className="agate text-[11px] text-ledger/40">{level}</span>
+            <span className="text-ledger/85 truncate">{club.city} {club.nickname}</span>
+            <span className="text-right agate text-ledger/70">{record.wins}-{record.losses}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TeamDetail() {
   const { id } = useParams();
   const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
@@ -347,6 +378,7 @@ export default function TeamDetail() {
 
       <div className="grid grid-cols-1 gap-4">
         <ManagerCard manager={manager} changes={managerChanges} />
+        <FarmSystemCard teamId={team.id} />
         <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} />
         <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} />
         <SeasonResultsTable teamId={team.id} teamsById={teamsById} />
