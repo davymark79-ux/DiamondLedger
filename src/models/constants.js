@@ -171,6 +171,76 @@ export const DRAFT_LOTTERY_MAX_RISE = 10; // a team can't rise more than this ma
 // incentive not to tank once eliminated.
 export const DRAFT_ELIMINATION_BONUS_SCALE = 0.5;
 
+// College System — Phase 3 of the "Path to Draft, Minors & Free Agency" arc
+// (player-pathway.md). All placeholders, needs real playtesting like every
+// other numeric constant in this codebase.
+export const COLLEGE_MAX_YEARS = 4;
+// Kept deliberately modest, NOT "real MLB scale" (which drafts from a pool
+// orders of magnitude bigger than what it picks) — a bigger multiplier
+// would make the standing unsigned population grow without bound. See
+// engine/college.js's header for the full population-control reasoning.
+export const HS_CLASS_SURPLUS_MULTIPLIER = 2;
+// Rolled once at the moment ANY player is drafted (HS senior or a
+// returning, still-unclaimed college player) — a rare, immediate "wants no
+// part of this team" outcome distinct from the normal sign-vs-stay decision.
+export const DRAFT_REFUSAL_PROBABILITY = 0.03;
+// Rolled once per college year, only if a redshirt hasn't already been
+// used — a proxy for "appeared in fewer than 25% of games" (no games are
+// simulated for college, per the doc's own permission to proxy this).
+export const COLLEGE_REDSHIRT_TRIGGER_PROBABILITY = 0.1;
+// At graduation, if a team still holds a player's rights (he stayed all 4
+// years + redshirt without ever separately signing), this is the rare
+// chance the team releases him to free agency instead of signing him —
+// real MLB teams virtually always sign a senior they've developed for 4
+// years, so this stays a small exception, not a coin flip.
+export const GRADUATION_RELEASE_PROBABILITY = 0.08;
+
+// The real fix for unbounded free-agent-pool growth (see engine/college.js's
+// header on why this can't just be a hard population cap) — steep, unlike
+// engine/retirement.js's established-pro curves (which don't kick in until
+// the 30s and don't fit a never-signed amateur washout's much younger,
+// much-lower-stakes decision to give up). Reaches effective certainty by
+// the late 20s specifically so the pool can never accumulate 29-year-olds.
+export const FREE_AGENT_RETIREMENT_AGE_CURVE = Object.freeze([
+  { maxAge: 22, probability: 0.05 },
+  { maxAge: 24, probability: 0.25 },
+  { maxAge: 26, probability: 0.55 },
+  { maxAge: 28, probability: 0.85 },
+  { maxAge: Infinity, probability: 1.0 },
+]);
+
+// player-pathway.md's "small set of specialty archetypes... reused across
+// many schools" — each maps to one of the existing attribute-group
+// constants below (engine/college.js's locationModifierForSchool).
+export const COLLEGE_SPECIALTIES = Object.freeze({
+  PITCHING_FACTORY: 'PITCHING_FACTORY',
+  HITTING_ACADEMY: 'HITTING_ACADEMY',
+  DEFENSE_FIRST: 'DEFENSE_FIRST',
+  ATHLETICISM_PROGRAM: 'ATHLETICISM_PROGRAM',
+});
+
+// Prestige tier 1 (powerhouse) through 5 (obscure) -> a flat per-period
+// growth bonus applied to every attribute via advanceDevelopmentPeriod's
+// locationModifier. A specialty school's matching attribute group gets a
+// further SPECIALTY_GROWTH_BONUS on top of its prestige bonus.
+export const PRESTIGE_GROWTH_BONUS_BY_TIER = Object.freeze({ 1: 1.5, 2: 1.0, 3: 0.5, 4: 0.2, 5: 0 });
+export const SPECIALTY_GROWTH_BONUS = 1.0;
+
+// The sign-vs-stay decision's value comparison (player-pathway.md: "the
+// value of the minor-league contract offered, vs. NIL earnings plus
+// continued development plus remaining eligibility" — no formula given
+// there, this is this phase's own placeholder resolution). signValue is
+// anchored to draft round (round 1 = the biggest signing bonus, tapering
+// off by round 10) — deliberately biases high picks toward signing now
+// rather than lingering, which also happens to be the real mechanism that
+// keeps genuinely elite prospects from ever piling up unsigned (see
+// engine/college.js's header).
+export const NIL_SCHOOL_PRESTIGE_WEIGHT = 3;
+export const NIL_QUALITY_WEIGHT = 0.5;
+export const SIGN_VALUE_BASE = 50;
+export const SIGN_VALUE_ROUND_DECAY = 4;
+export const STAY_PROBABILITY_SENSITIVITY = 0.01;
+
 // Injury severity tiers (injuries.md). DAY_TO_DAY has no real IL minimum
 // and rolls a small variable range; the rest carry a hard floor
 // (INJURY_SEVERITY_MINIMUM_GAMES, engine/injuries.js) matching the real

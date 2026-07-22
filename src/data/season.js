@@ -27,17 +27,22 @@ import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression
 import { simulateMinorLeagueSeasons } from '../engine/minorLeagues.js';
 import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDivisionSwaps } from '../engine/promotionRelegation.js';
 import { simulatePlayoffs } from '../engine/playoffs.js';
-import { computeDraftOrder, buildDraftPicks, generateDraftClass, resolveDraft, assignSignedDraftees } from '../engine/draft.js';
+import { computeDraftOrder, buildDraftPicks } from '../engine/draft.js';
+import { generateHsClass, seedInitialCollegePopulation, runCollegePathway } from '../engine/college.js';
 import { createRng } from '../models/generation/random.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
-const STORAGE_KEY = 'diamondLedger.leagueState.v5'; // bumped from v4 — the Domestic Draft (Phase 2 of the Path to Draft/Minors/Free-Agency arc) added draftResult to the state shape; an old v1-v4 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
+const STORAGE_KEY = 'diamondLedger.leagueState.v6'; // bumped from v5 — the College System (Phase 3 of the Path to Draft/Minors/Free-Agency arc) added collegeEnrollmentById/collegePlayersById/freeAgentPoolById to the state shape; an old v1-v5 save is simply ignored (falls back to fresh) rather than patched, exactly what the versioning exists for
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
- * result/results — same data promotion/relegation reads) and signs every
- * pick straight into the drafting club's Rookie roster. Mutates
- * `affiliateRosterByClubId` in place, same ownership contract as
+ * result/results — same data promotion/relegation reads) against the
+ * combined pool of a fresh HS class and the returning, unclaimed college
+ * population, then processes the full College System pathway for
+ * everyone else (enrollment, year advancement, graduation, free-agent
+ * pruning) — see engine/college.js's runCollegePathway. Mutates
+ * `affiliateRosterByClubId`/`collegeEnrollmentById`/`collegePlayersById`/
+ * `freeAgentPoolById` in place, same ownership contract as
  * engine/leagueProgression.js's advanceOffseason (roleStateById) and
  * engine/minorLeagues.js's promoteAndBackfill.
  * @param {object[]} currentTeams
@@ -45,33 +50,30 @@ const STORAGE_KEY = 'diamondLedger.leagueState.v5'; // bumped from v4 — the Do
  * @param {object} playoffResult
  * @param {object[]} results
  * @param {Map<string, object>} affiliateRosterByClubId
- * @param {number} seasonNumber - the season whose results are driving this draft (for a unique draft-class id prefix)
+ * @param {Map<string, object>} collegeEnrollmentById
+ * @param {Map<string, object>} collegePlayersById
+ * @param {Map<string, object>} freeAgentPoolById
+ * @param {number} seasonNumber - the season whose results are driving this draft (for a unique HS-class id prefix)
  * @param {() => number} rng
- * @returns {{ seasonNumber: number, picks: object[], selections: object[] }} selections are enriched with
- *   {firstName, lastName, primaryPosition, isPitcher} directly (not just a playerId) — draftResult needs
- *   to stay a fully self-contained, JSON-native display source for the UI, since the draft class itself
- *   isn't persisted separately.
+ * @param {Date} asOfDate
+ * @returns {{ seasonNumber: number, picks: object[], selections: object[], collegeSummary: object }} selections are
+ *   enriched with {firstName, lastName, primaryPosition, isPitcher, fromCollege, outcome} directly (not just a
+ *   playerId) — draftResult needs to stay a fully self-contained, JSON-native display source for the UI.
  */
-function runDraft(currentTeams, standingsById, playoffResult, results, affiliateRosterByClubId, seasonNumber, rng) {
+function runDraftAndCollegePathway(
+  currentTeams, standingsById, playoffResult, results,
+  affiliateRosterByClubId, collegeEnrollmentById, collegePlayersById, freeAgentPoolById,
+  seasonNumber, rng, asOfDate
+) {
   const { round1Order, regularOrder } = computeDraftOrder(currentTeams, standingsById, playoffResult, results, rng);
   const picks = buildDraftPicks(round1Order, regularOrder);
-  const draftClass = generateDraftClass(rng, new Date(), `draft-s${seasonNumber}`);
-  const { selections } = resolveDraft(picks, draftClass);
-  assignSignedDraftees(selections, draftClass, affiliateRosterByClubId);
+  const freshHsClass = generateHsClass(rng, asOfDate, `hs-s${seasonNumber}`);
 
-  const draftClassById = new Map(draftClass.map((p) => [p.id, p]));
-  const enrichedSelections = selections.map((selection) => {
-    const player = draftClassById.get(selection.playerId);
-    return {
-      ...selection,
-      firstName: player.firstName,
-      lastName: player.lastName,
-      primaryPosition: player.primaryPosition,
-      isPitcher: player.isPitcher,
-    };
-  });
+  const { summary, selections } = runCollegePathway(
+    picks, freshHsClass, collegeEnrollmentById, collegePlayersById, freeAgentPoolById, affiliateRosterByClubId, rng, asOfDate
+  );
 
-  return { seasonNumber, picks, selections: enrichedSelections };
+  return { seasonNumber, picks, selections, collegeSummary: summary };
 }
 
 /**
@@ -175,6 +177,11 @@ function serializeState(state) {
     affiliateRosterByClubId: mapToObj(state.affiliateRosterByClubId),
     affiliateStandingsById: mapToObj(state.affiliateStandingsById),
     draftResult: state.draftResult, // plain, JSON-native already — no Maps inside it
+    // College System — real, growing (but retirement-bounded, see
+    // engine/college.js's header) persistent population.
+    collegeEnrollmentById: mapToObj(state.collegeEnrollmentById),
+    collegePlayersById: mapToObj(state.collegePlayersById),
+    freeAgentPoolById: mapToObj(state.freeAgentPoolById),
   };
 }
 
@@ -193,6 +200,9 @@ function deserializeState(plain) {
     affiliateRosterByClubId: objToMap(plain.affiliateRosterByClubId),
     affiliateStandingsById: objToMap(plain.affiliateStandingsById),
     draftResult: plain.draftResult,
+    collegeEnrollmentById: objToMap(plain.collegeEnrollmentById),
+    collegePlayersById: objToMap(plain.collegePlayersById),
+    freeAgentPoolById: objToMap(plain.freeAgentPoolById),
   };
 }
 
@@ -222,7 +232,17 @@ function computeFreshSeason1State() {
   const rosterByTeamId = new Map(teams.map((t) => [t.id, getTeamRoster(t.id)]));
   const managerByTeamId = new Map(teams.map((t) => [t.id, getTeamManager(t.id)]));
   const affiliateRosterByClubId = initialAffiliateRosterByClubId();
+  const asOfDate = new Date();
   const rng = seasonRngForNumber(1);
+
+  // One-time bootstrap (season 1 only) — backfills all 4 college class
+  // years at once so the system starts with a realistic, immediately-
+  // populated pyramid instead of an empty one that takes 3+ real seasons
+  // to fill up on its own. Every season after this only ever generates a
+  // true incoming freshman class (see runDraftAndCollegePathway).
+  const { collegeEnrollmentById, collegePlayersById } = seedInitialCollegePopulation(rng, asOfDate);
+  const freeAgentPoolById = new Map();
+
   const { seasonResult } = simulateOneSeason(
     teams,
     (id) => rosterByTeamId.get(id),
@@ -246,11 +266,15 @@ function computeFreshSeason1State() {
   // into affiliateRosterByClubId (mutated in place), so they show up
   // starting with season 2's own minor-league sim, not season 1's (which
   // already ran, above).
-  const draftResult = runDraft(teams, seasonResult.standingsById, playoffResult, seasonResult.results, affiliateRosterByClubId, 1, rng);
+  const draftResult = runDraftAndCollegePathway(
+    teams, seasonResult.standingsById, playoffResult, seasonResult.results,
+    affiliateRosterByClubId, collegeEnrollmentById, collegePlayersById, freeAgentPoolById,
+    1, rng, asOfDate
+  );
 
   return {
     seasonNumber: 1,
-    asOfDate: new Date(),
+    asOfDate,
     rosterByTeamId,
     managerByTeamId,
     roleStateById: new Map(),
@@ -262,6 +286,9 @@ function computeFreshSeason1State() {
     affiliateRosterByClubId,
     affiliateStandingsById,
     draftResult,
+    collegeEnrollmentById,
+    collegePlayersById,
+    freeAgentPoolById,
   };
 }
 
@@ -351,22 +378,30 @@ export function advanceToNextSeason(state) {
     rng
   );
 
-  // The draft is likewise THIS new season's own culmination — using the
-  // standings/playoff result just computed above, NOT state's (that data
-  // already drove the draft that fed THIS season's own incoming rookies,
-  // back when this state was first produced — reusing it again here would
-  // silently run the same season's results through the draft twice).
-  // Draftees sign straight into affiliateRosterByClubId (mutated in place,
-  // same instance carried forward) so they're real organizational depth by
-  // the time the NEXT transition's call-up cascade/minor-league sim runs.
-  const draftResult = runDraft(
+  // The draft (and the College System pathway alongside it) is likewise
+  // THIS new season's own culmination — using the standings/playoff result
+  // just computed above, NOT state's (that data already drove the draft
+  // that fed THIS season's own incoming rookies, back when this state was
+  // first produced — reusing it again here would silently run the same
+  // season's results through the draft twice). Draftees/college signings
+  // land straight in affiliateRosterByClubId (mutated in place, same
+  // instance carried forward) so they're real organizational depth by the
+  // time the NEXT transition's call-up cascade/minor-league sim runs;
+  // collegeEnrollmentById/collegePlayersById/freeAgentPoolById are
+  // likewise mutated in place and carried forward, same ownership
+  // contract as everything else this arc touches.
+  const draftResult = runDraftAndCollegePathway(
     teamsForNextSeason,
     seasonResult.standingsById,
     playoffResult,
     seasonResult.results,
     state.affiliateRosterByClubId,
+    state.collegeEnrollmentById,
+    state.collegePlayersById,
+    state.freeAgentPoolById,
     seasonNumber,
-    rng
+    rng,
+    asOfDate
   );
 
   return {
@@ -383,5 +418,8 @@ export function advanceToNextSeason(state) {
     affiliateRosterByClubId: state.affiliateRosterByClubId,
     affiliateStandingsById,
     draftResult,
+    collegeEnrollmentById: state.collegeEnrollmentById,
+    collegePlayersById: state.collegePlayersById,
+    freeAgentPoolById: state.freeAgentPoolById,
   };
 }

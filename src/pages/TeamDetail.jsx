@@ -310,8 +310,9 @@ function ManagerCard({ manager, changes = [] }) {
 // No per-affiliate roster drill-down yet — a reasonable follow-up once a
 // later phase of this arc needs it, not required to prove this phase works.
 function FarmSystemCard({ teamId }) {
-  const { getAffiliateClub, getAffiliateStandings } = useLeagueState();
+  const { getAffiliateClub, getAffiliateStandings, getTeamCollegeRightsCount } = useLeagueState();
   const levels = [...MINOR_LEAGUE_LEVELS_ORDER].reverse();
+  const collegeRightsCount = getTeamCollegeRightsCount(teamId);
 
   return (
     <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
@@ -330,6 +331,13 @@ function FarmSystemCard({ teamId }) {
           </div>
         );
       })}
+      {/* College System (engine/college.js) — a drafted-but-deferred player
+          stays under this team's rights through his whole college career
+          (real NHL-style draft-and-follow); this is just a count, a full
+          browsable list is future polish. */}
+      <div className="px-4 py-1.5 text-xs text-ledger/50">
+        College Draft Rights Held: <span className="agate text-ledger/80">{collegeRightsCount}</span>
+      </div>
     </div>
   );
 }

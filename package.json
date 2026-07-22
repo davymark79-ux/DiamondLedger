@@ -23,7 +23,8 @@
     "validate:managers": "node scripts/validate-manager-entity.mjs",
     "validate:hof": "node scripts/validate-hall-of-fame.mjs",
     "validate:minors": "node scripts/validate-minor-leagues.mjs",
-    "validate:draft": "node scripts/validate-draft.mjs"
+    "validate:draft": "node scripts/validate-draft.mjs",
+    "validate:college": "node scripts/validate-college.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

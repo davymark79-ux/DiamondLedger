@@ -165,9 +165,29 @@ export function LeagueStateProvider({ children }) {
 
   // Domestic Draft (engine/draft.js) — this season's real draft, already
   // fully self-contained (selections carry player display fields directly,
-  // see data/season.js's runDraft) so no extra lookup is needed here.
+  // see data/season.js's runDraftAndCollegePathway) so no extra lookup is
+  // needed here.
   function getDraftResult() {
     return state.draftResult;
+  }
+
+  // College System (engine/college.js) — this season's pathway counts
+  // (new enrollments, refusals, sign-vs-stay outcomes, graduations, free-
+  // agent retirements), already folded into draftResult since both run
+  // together at the same season boundary.
+  function getCollegeSummary() {
+    return state.draftResult.collegeSummary;
+  }
+
+  // How many players a team currently holds deferred draft rights to
+  // (drafted, chose to stay in college, rights held through his college
+  // career per the doc's NHL-style draft-and-follow framing).
+  function getTeamCollegeRightsCount(teamId) {
+    let count = 0;
+    for (const enrollment of state.collegeEnrollmentById.values()) {
+      if (enrollment.draftRightsTeamId === teamId) count++;
+    }
+    return count;
   }
 
   // A real, league-wide activity feed — injuries (currently-active only,
@@ -290,6 +310,8 @@ export function LeagueStateProvider({ children }) {
     getAffiliateRoster,
     getAffiliateStandings,
     getDraftResult,
+    getCollegeSummary,
+    getTeamCollegeRightsCount,
   };
 
   return <LeagueStateContext.Provider value={value}>{children}</LeagueStateContext.Provider>;

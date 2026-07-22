@@ -305,7 +305,9 @@ export function generateDraftClass(rng, asOfDate, idPrefix, count = DRAFT_ROUNDS
   return generatePlayers(count, { rng, asOfDate, idPrefix });
 }
 
-function scoutedScore(player) {
+// Exported — engine/college.js's sign-vs-stay NIL comparison reuses this
+// exact composite rather than redefining it a second time.
+export function scoutedScore(player) {
   const attributes = player.isPitcher
     ? PITCHING_ATTRIBUTES
     : [...HITTING_ATTRIBUTES, ...BASERUNNING_ATTRIBUTES, ...DEFENSE_ATTRIBUTES];

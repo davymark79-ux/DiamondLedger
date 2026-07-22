@@ -296,45 +296,37 @@ console.log('\n=== 10. assignSignedDraftees: real Rookie-roster insertion ===\n'
 
 console.log('\n=== 11. Real wiring: data/season.js ===\n');
 {
+  // Updated for Phase 3 (College System): every pick still resolves to a
+  // selection, but NOT every selection signs immediately anymore, and a
+  // signing college player can land at A/AA/AAA, not just Rookie — the
+  // old "100% sign rate straight to Rookie" placeholder was always
+  // flagged as exactly that, a placeholder, and Phase 3 is its planned
+  // replacement. The detailed outcome-distribution/headcount checks now
+  // live in validate:college; this section just confirms the draft
+  // mechanics themselves still wire up correctly on top of that.
   const mod = await import('../src/data/season.js');
-  const { affiliateClubs } = await import('../src/data/realAffiliates.js');
   const state = mod.initialLeagueState;
 
   assert(!!state.draftResult, 'season 1 has a real draftResult');
   assert(state.draftResult.picks.length === DRAFT_ROUNDS * 50, `the full draft has ${DRAFT_ROUNDS * 50} picks (got ${state.draftResult.picks.length})`);
-  assert(state.draftResult.selections.length === state.draftResult.picks.length, 'every pick resolves to a selection (100% sign-rate placeholder)');
+  assert(state.draftResult.selections.length === state.draftResult.picks.length, 'every pick resolves to a selection, one per pick');
   assert(state.draftResult.selections.every((s) => s.firstName && s.lastName && s.primaryPosition), 'every selection is enriched with real display fields, not just a bare playerId');
+  assert(state.draftResult.selections.every((s) => ['signed', 'deferred', 'refused'].includes(s.outcome)), 'every selection carries a real 3-way outcome (Phase 3\'s College System)');
+  assert(state.draftResult.selections.some((s) => s.outcome === 'signed'), 'at least some selections sign immediately, same season');
+  assert(!!state.draftResult.collegeSummary, 'season 1 also produces a real College System summary alongside the draft');
 
-  const rookieClubs = affiliateClubs.filter((c) => c.level === 'ROOKIE');
-  let totalRookiePlayers = 0;
-  for (const club of rookieClubs) {
-    const roster = state.affiliateRosterByClubId.get(club.id);
-    totalRookiePlayers += roster.lineup.length + roster.rotation.length + roster.bullpen.length + roster.bench.length;
-  }
-  const expected = rookieClubs.length * 20 + DRAFT_ROUNDS * 50; // Phase 1's initial 20/club + this season's full draft class, all signed to Rookie
-  assert(totalRookiePlayers === expected, `total Rookie-ball headcount reflects the full draft class added on top of Phase 1's seed rosters (expected ${expected}, got ${totalRookiePlayers})`);
-
-  // Real bug caught and fixed during this phase's own live verification:
+  // Real bug caught and fixed during Phase 2's own live verification,
+  // still guarded here since Phase 3 restructured this code path:
   // advanceToNextSeason() must run the draft against the season it JUST
   // simulated (seasonNumber 2's own results), not the incoming state's
   // (season 1's — already consumed by season 1's own draft above) —
   // reusing the same season's results twice would silently draft the same
-  // competitive picture again instead of a fresh one. Headcount after one
-  // real advance should reflect TWO full draft classes on top of the seed.
+  // competitive picture again instead of a fresh one.
   const state2 = mod.advanceToNextSeason(state);
   assert(state2.draftResult.seasonNumber === 2, "advancing one season produces a draftResult sourced from season 2's own results, not season 1's again");
   assert(
     JSON.stringify(state2.draftResult.selections.map((s) => s.playerId)) !== JSON.stringify(state.draftResult.selections.map((s) => s.playerId)),
     "season 2's draft class is a genuinely fresh set of prospects, not a re-run of season 1's"
-  );
-  let totalRookiePlayersAfter = 0;
-  for (const club of rookieClubs) {
-    const roster = state2.affiliateRosterByClubId.get(club.id);
-    totalRookiePlayersAfter += roster.lineup.length + roster.rotation.length + roster.bullpen.length + roster.bench.length;
-  }
-  assert(
-    totalRookiePlayersAfter === rookieClubs.length * 20 + DRAFT_ROUNDS * 50 * 2,
-    `after one real season advance, Rookie-ball headcount reflects exactly TWO draft classes on top of the seed (expected ${rookieClubs.length * 20 + DRAFT_ROUNDS * 50 * 2}, got ${totalRookiePlayersAfter})`
   );
 }
 
