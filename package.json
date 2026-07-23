@@ -26,7 +26,8 @@
     "validate:draft": "node scripts/validate-draft.mjs",
     "validate:college": "node scripts/validate-college.mjs",
     "validate:international": "node scripts/validate-international.mjs",
-    "validate:freeagency": "node scripts/validate-free-agency.mjs"
+    "validate:freeagency": "node scripts/validate-free-agency.mjs",
+    "validate:calendar": "node scripts/validate-calendar.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

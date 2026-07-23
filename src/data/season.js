@@ -59,13 +59,14 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (Phase 5 adds
-// establishedFreeAgentPoolById) — continues the old v1-v7 localStorage
-// version-bump convention, but now enforced as a real field ON the state
-// object itself and checked on load (see isCompatibleSave below), since
-// IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
-// — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 8;
+// Bumped whenever the persisted state's SHAPE changes (v9: "The Ledger
+// Cup" build arc's Phase 1 adds a real weekPlan field to every season) —
+// continues the old v1-v7 localStorage version-bump convention, but now
+// enforced as a real field ON the state object itself and checked on load
+// (see isCompatibleSave below), since IndexedDB only ever has the one
+// 'current' key (data/indexedDbStorage.js) — there's no separate
+// versioned key to bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 9;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -256,7 +257,7 @@ function computeFreshSeason1State() {
   const { academyEnrollmentById, academyPlayersById } = seedInitialAcademyPopulation(rng, asOfDate);
   const internationalFreeAgentPoolById = new Map();
 
-  const { seasonResult } = simulateOneSeason(
+  const { seasonResult, weekPlan } = simulateOneSeason(
     teams,
     (id) => rosterByTeamId.get(id),
     (id) => managerByTeamId.get(id),
@@ -316,6 +317,7 @@ function computeFreshSeason1State() {
     promotionRelegationSwaps: [], // nothing to promote/relegate yet — no prior season exists to evaluate
     playoffResult,
     seasonResult,
+    weekPlan,
     affiliateRosterByClubId,
     affiliateStandingsById,
     draftResult,
@@ -393,7 +395,7 @@ export function advanceToNextSeason(state) {
     state.affiliateRosterByClubId // also mutated in place by the call-up cascade — same ownership contract as roleStateById
   );
 
-  const { seasonResult } = simulateOneSeason(
+  const { seasonResult, weekPlan } = simulateOneSeason(
     teamsForNextSeason,
     (id) => rosterByTeamId.get(id),
     (id) => managerByTeamId.get(id),
@@ -481,6 +483,7 @@ export function advanceToNextSeason(state) {
     promotionRelegationSwaps,
     playoffResult,
     seasonResult,
+    weekPlan,
     affiliateRosterByClubId: state.affiliateRosterByClubId,
     affiliateStandingsById,
     draftResult,

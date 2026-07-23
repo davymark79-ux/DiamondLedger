@@ -45,7 +45,8 @@
 // as an explicit, flagged proxy wherever managers.md/awards-and-hall-of-
 // fame.md call for championship credit.
 
-import { buildSeasonSchedule, simulateSeason, groupTeamsForScheduling, BATTING_STAT_FIELDS, PITCHING_STAT_FIELDS, emptySeasonBattingTotals, emptySeasonPitchingTotals, TARGET_GAMES_PER_TEAM } from './season.js';
+import { simulateSeason, groupTeamsForScheduling, BATTING_STAT_FIELDS, PITCHING_STAT_FIELDS, emptySeasonBattingTotals, emptySeasonPitchingTotals, TARGET_GAMES_PER_TEAM } from './season.js';
+import { buildCalendarSeasonSchedule } from './calendar.js';
 import { advanceDevelopmentPeriodWithReassignment } from './development.js';
 import { rollRetirement, rollManagerRetirement } from './retirement.js';
 import { rollWriterRetirement } from './writerRetirement.js';
@@ -62,20 +63,29 @@ function qualityRangeForTeam(team) {
 
 /**
  * One season's worth of real games against a given roster/manager snapshot
- * — the `buildSeasonSchedule` + `simulateSeason` pair, extracted so it's
- * reusable both by this file's own per-season loop below and by a live,
- * one-season-at-a-time caller (data/season.js's advanceToNextSeason).
+ * — the `buildCalendarSeasonSchedule` + `simulateSeason` pair, extracted so
+ * it's reusable both by this file's own per-season loop below and by a
+ * live, one-season-at-a-time caller (data/season.js's advanceToNextSeason).
+ *
+ * `calendarOptions` (engine/calendar.js, "The Ledger Cup" build arc's
+ * Phase 1) defaults to `{}` — zero blackout weeks, since the Cup itself
+ * doesn't exist yet — which makes `buildCalendarSeasonSchedule` produce a
+ * `schedule` array byte-identical to the old direct `buildSeasonSchedule`
+ * call (only the added `week` field differs; `simulateSeason` ignores it).
+ * A future Cup Engine phase will pass real blackout-week counts here with
+ * no further signature changes needed.
  * @param {object[]} teams
  * @param {(teamId: string) => object} getTeamRoster
  * @param {(teamId: string) => object|null} getTeamManager
  * @param {() => number} rng
  * @param {number} [gamesPerSeason] - real usage: TARGET_GAMES_PER_TEAM (150); shortened for fast validation runs (see validate-hall-of-fame.mjs)
- * @returns {{schedule: object[], seasonResult: object}} seasonResult is simulateSeason()'s full return value
+ * @param {object} [calendarOptions] - see engine/calendar.js's buildSeasonWeekPlan
+ * @returns {{schedule: object[], weekPlan: object, seasonResult: object}} seasonResult is simulateSeason()'s full return value
  */
-export function simulateOneSeason(teams, getTeamRoster, getTeamManager, rng, gamesPerSeason = TARGET_GAMES_PER_TEAM) {
-  const schedule = buildSeasonSchedule(teams, gamesPerSeason, rng);
+export function simulateOneSeason(teams, getTeamRoster, getTeamManager, rng, gamesPerSeason = TARGET_GAMES_PER_TEAM, calendarOptions = {}) {
+  const { schedule, weekPlan } = buildCalendarSeasonSchedule(teams, gamesPerSeason, rng, calendarOptions);
   const seasonResult = simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager);
-  return { schedule, seasonResult };
+  return { schedule, weekPlan, seasonResult };
 }
 
 // Retiree replacement: a real call-up from the org's own AAA affiliate
