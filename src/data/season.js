@@ -34,7 +34,7 @@
 // in src/state/LeagueStateContext.jsx's mount effect, which swaps in a real
 // save (if one exists) via dispatch once IndexedDB resolves.
 
-import { teams, getTeamRoster, getTeamManager } from './realLeague.js';
+import { teams, freeAgents, getTeamRoster, getTeamManager } from './realLeague.js';
 import { affiliateClubs, initialAffiliateRosterByClubId } from './realAffiliates.js';
 import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
 import { simulateMinorLeagueSeasons } from '../engine/minorLeagues.js';
@@ -49,6 +49,7 @@ import {
   buildInternationalDraftPicks,
   runInternationalPathway,
 } from '../engine/internationalAcademy.js';
+import { advanceEstablishedFreeAgentPool } from '../engine/freeAgency.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -58,6 +59,13 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
+// Bumped whenever the persisted state's SHAPE changes (Phase 5 adds
+// establishedFreeAgentPoolById) — continues the old v1-v7 localStorage
+// version-bump convention, but now enforced as a real field ON the state
+// object itself and checked on load (see isCompatibleSave below), since
+// IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
+// — there's no separate versioned key to bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 8;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -194,10 +202,33 @@ export async function saveState(state) {
   }
 }
 
-/** @returns {Promise<object|null>} a saved state if one exists, otherwise null. Never throws. */
+/**
+ * A saved state is only usable if its schemaVersion matches this build's
+ * expected shape exactly — a missing/older/newer number means at least one
+ * Map/field this code now assumes exists (e.g. Phase 5's
+ * establishedFreeAgentPoolById) may be absent, which would crash deep in a
+ * getter rather than fail loudly here. Same discard-don't-migrate
+ * precedent as the old localStorage v1-v7 convention (LEGACY_LOCAL_STORAGE_KEY
+ * above) — a mismatched save is simply ignored; the caller
+ * (LeagueStateContext.jsx's hydration effect) falls back to
+ * initialLeagueState, a fresh season 1 already stamped with the current
+ * STATE_SCHEMA_VERSION.
+ *
+ * Exported as its own pure predicate (rather than inlined into
+ * loadStateAsync) so scripts/validate-free-agency.mjs can exercise it
+ * directly without a real IndexedDB (unavailable in Node).
+ * @param {object|null} saved
+ * @returns {boolean}
+ */
+export function isCompatibleSave(saved) {
+  return !!saved && saved.schemaVersion === STATE_SCHEMA_VERSION;
+}
+
+/** @returns {Promise<object|null>} a saved, SCHEMA-COMPATIBLE state if one exists, otherwise null. Never throws. */
 export async function loadStateAsync() {
   try {
-    return await loadLeagueState();
+    const saved = await loadLeagueState();
+    return isCompatibleSave(saved) ? saved : null;
   } catch (err) {
     console.warn('Failed to load saved league state, starting fresh:', err);
     return null;
@@ -265,6 +296,15 @@ function computeFreshSeason1State() {
     internationalFreeAgentPoolById, 1, rng, asOfDate
   );
 
+  // Free Agency (Phase 5) — migrates realLeague.js's frozen, never-wired
+  // `freeAgents` array into LIVE, persisted state: ages/persists/prunes
+  // across seasons via advanceEstablishedFreeAgentPool, same "read once,
+  // then own the Map going forward" treatment teams/players/managers
+  // already get from realLeague.js. A real season-1 retirement pass too,
+  // for consistency with every other free-agent pool.
+  const establishedFreeAgentPoolById = new Map(freeAgents.map((p) => [p.id, p]));
+  advanceEstablishedFreeAgentPool(establishedFreeAgentPoolById, rng, asOfDate);
+
   return {
     seasonNumber: 1,
     asOfDate,
@@ -286,6 +326,8 @@ function computeFreshSeason1State() {
     academyPlayersById,
     internationalFreeAgentPoolById,
     internationalDraftResult,
+    establishedFreeAgentPoolById,
+    schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
 
@@ -423,6 +465,11 @@ export function advanceToNextSeason(state) {
     asOfDate
   );
 
+  // Same "this new season's own culmination" timing as the pathways above
+  // — mutated in place, same instance carried forward as everything else
+  // this arc touches.
+  advanceEstablishedFreeAgentPool(state.establishedFreeAgentPoolById, rng, asOfDate);
+
   return {
     seasonNumber,
     asOfDate,
@@ -444,5 +491,7 @@ export function advanceToNextSeason(state) {
     academyPlayersById: state.academyPlayersById,
     internationalFreeAgentPoolById: state.internationalFreeAgentPoolById,
     internationalDraftResult,
+    establishedFreeAgentPoolById: state.establishedFreeAgentPoolById,
+    schemaVersion: STATE_SCHEMA_VERSION,
   };
 }

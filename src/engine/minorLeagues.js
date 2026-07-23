@@ -94,7 +94,12 @@ export function simulateMinorLeagueSeasons(affiliateClubs, affiliateRosterByClub
 
 // ===== Call-up / backfill cascade =====
 
-function playerQualityScore(player) {
+// Exported — engine/freeAgency.js's (Phase 5) release-to-make-room and
+// minors-signing-level logic reuse this exact current-ability composite
+// (not draft.js's scoutedScore, which is potential-based) to rank real,
+// already-established players — same precedent as scoutedScore itself
+// being exported from draft.js specifically for college.js's reuse.
+export function playerQualityScore(player) {
   const attributes = player.isPitcher
     ? PITCHING_ATTRIBUTES
     : [...HITTING_ATTRIBUTES, ...BASERUNNING_ATTRIBUTES, ...DEFENSE_ATTRIBUTES];

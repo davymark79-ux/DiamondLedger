@@ -25,7 +25,8 @@
     "validate:minors": "node scripts/validate-minor-leagues.mjs",
     "validate:draft": "node scripts/validate-draft.mjs",
     "validate:college": "node scripts/validate-college.mjs",
-    "validate:international": "node scripts/validate-international.mjs"
+    "validate:international": "node scripts/validate-international.mjs",
+    "validate:freeagency": "node scripts/validate-free-agency.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

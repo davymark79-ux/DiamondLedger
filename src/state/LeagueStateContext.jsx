@@ -20,6 +20,10 @@ import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from '../e
 import { computeFatiguePenalty } from '../engine/positionPlayerFatigue.js';
 import { getPromotionRelegationPairing } from '../models/League.js';
 import { LEAGUES } from '../models/constants.js';
+import {
+  signAmateurFreeAgent as signAmateurFreeAgentEngine,
+  signEstablishedFreeAgent as signEstablishedFreeAgentEngine,
+} from '../engine/freeAgency.js';
 
 const LeagueStateContext = createContext(null);
 
@@ -251,6 +255,70 @@ export function LeagueStateProvider({ children }) {
     return state.internationalDraftResult.selections.filter((s) => s.outcome === 'signed' && s.teamId === teamId).length;
   }
 
+  // Free Agency (engine/freeAgency.js, Phase 5) — three separate,
+  // independently-sourced pools. Plain, non-memoized reads (matching
+  // getAffiliateRoster/etc's existing convention) so a post-signing
+  // re-render always reflects the current Map contents.
+  function getCollegeFreeAgents() {
+    return [...state.freeAgentPoolById.values()];
+  }
+
+  function getInternationalFreeAgents() {
+    return [...state.internationalFreeAgentPoolById.values()];
+  }
+
+  function getEstablishedFreeAgents() {
+    return [...state.establishedFreeAgentPoolById.values()];
+  }
+
+  // Signs a College or International free agent onto teamId's affiliate
+  // system (engine/freeAgency.js's signAmateurFreeAgent, shared by both
+  // pools). Guarded by isSimulating — a season advance takes several real
+  // seconds and captures `state` in a closure at click-time; a sign firing
+  // in that window would otherwise get silently overwritten by the season
+  // advance's own stale-captured state once it resolves.
+  async function signCollegeFreeAgent(playerId, teamId) {
+    if (isSimulating) return null;
+    const result = signAmateurFreeAgentEngine(playerId, teamId, state.freeAgentPoolById, state.affiliateRosterByClubId);
+    if (!result) return null;
+    const next = { ...state };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
+  async function signInternationalFreeAgent(playerId, teamId) {
+    if (isSimulating) return null;
+    const result = signAmateurFreeAgentEngine(playerId, teamId, state.internationalFreeAgentPoolById, state.affiliateRosterByClubId);
+    if (!result) return null;
+    const next = { ...state };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
+  // Signs an established free agent directly onto teamId's 26-man MLB
+  // roster (engine/freeAgency.js's signEstablishedFreeAgent). Unlike the
+  // two actions above, this one DOES need a fresh rosterByTeamId Map
+  // reference (not an in-place .set() on the existing one) — that Map is
+  // the one piece of state everywhere else in this codebase treated as
+  // "replaced wholesale on every change" (engine/leagueProgression.js's
+  // advanceOffseason always builds a new Map), and playersById above is a
+  // useMemo keyed on state.rosterByTeamId's reference — mutating it in
+  // place would leave that memo silently stale.
+  async function signEstablishedFreeAgent(playerId, teamId) {
+    if (isSimulating) return null;
+    const roster = state.rosterByTeamId.get(teamId);
+    const result = signEstablishedFreeAgentEngine(playerId, teamId, state.establishedFreeAgentPoolById, roster);
+    if (!result) return null;
+    const rosterByTeamId = new Map(state.rosterByTeamId);
+    rosterByTeamId.set(teamId, result.updatedRoster);
+    const next = { ...state, rosterByTeamId };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -349,6 +417,7 @@ export function LeagueStateProvider({ children }) {
 
   const value = {
     seasonNumber: state.seasonNumber,
+    asOfDate: state.asOfDate,
     isSimulating,
     advanceSeason,
     resetSeason,
@@ -376,6 +445,12 @@ export function LeagueStateProvider({ children }) {
     getInternationalDraftResult,
     getInternationalSummary,
     getTeamInternationalSigningsCount,
+    getCollegeFreeAgents,
+    getInternationalFreeAgents,
+    getEstablishedFreeAgents,
+    signCollegeFreeAgent,
+    signInternationalFreeAgent,
+    signEstablishedFreeAgent,
   };
 
   // Blocks rendering `children` (and every page's useLeagueState() calls)
