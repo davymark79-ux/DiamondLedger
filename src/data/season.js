@@ -50,6 +50,12 @@ import {
   runInternationalPathway,
 } from '../engine/internationalAcademy.js';
 import { advanceEstablishedFreeAgentPool } from '../engine/freeAgency.js';
+import {
+  createInitialQuotientByTeamId,
+  decayQuotientsForNewSeason,
+  foldRegularSeasonResults,
+  foldPlayoffResult,
+} from '../engine/tournamentQuotient.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -59,14 +65,15 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v9: "The Ledger
-// Cup" build arc's Phase 1 adds a real weekPlan field to every season) —
-// continues the old v1-v7 localStorage version-bump convention, but now
-// enforced as a real field ON the state object itself and checked on load
-// (see isCompatibleSave below), since IndexedDB only ever has the one
-// 'current' key (data/indexedDbStorage.js) — there's no separate
+// Bumped whenever the persisted state's SHAPE changes (v10: "The Ledger
+// Cup" build arc's Phase 2 adds a real quotientByTeamId field, folded
+// after every regular-season and playoff game and decayed once per
+// season) — continues the old v1-v7 localStorage version-bump convention,
+// but now enforced as a real field ON the state object itself and checked
+// on load (see isCompatibleSave below), since IndexedDB only ever has the
+// one 'current' key (data/indexedDbStorage.js) — there's no separate
 // versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 9;
+export const STATE_SCHEMA_VERSION = 10;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -236,12 +243,21 @@ export async function loadStateAsync() {
   }
 }
 
-function computeFreshSeason1State() {
+export function computeFreshSeason1State() {
   const rosterByTeamId = new Map(teams.map((t) => [t.id, getTeamRoster(t.id)]));
   const managerByTeamId = new Map(teams.map((t) => [t.id, getTeamManager(t.id)]));
   const affiliateRosterByClubId = initialAffiliateRosterByClubId();
   const asOfDate = new Date();
   const rng = seasonRngForNumber(1);
+
+  // Tournament Quotient (Ledger Cup arc, Phase 2) — the 50 real teams are
+  // established clubs being newly rated for the first time, not fictional
+  // expansion clubs, so they start at CENTER (60.00), not the floor
+  // reserved for a genuine new/expansion club (see
+  // engine/tournamentQuotient.js). No decay call this season — season 1
+  // has no prior season to decay from, same precedent as
+  // promotionRelegationSwaps: [] below.
+  let quotientByTeamId = createInitialQuotientByTeamId(teams.map((t) => t.id));
 
   // One-time bootstrap (season 1 only) — backfills all 4 college class
   // years at once so the system starts with a realistic, immediately-
@@ -263,6 +279,10 @@ function computeFreshSeason1State() {
     (id) => managerByTeamId.get(id),
     rng
   );
+  // Regular-season fold — a pure post-hoc pass over this season's own
+  // already-complete results array (see engine/tournamentQuotient.js's
+  // header for why this isn't threaded live through simulateSeason itself).
+  quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
   const { standingsById: affiliateStandingsById } = simulateMinorLeagueSeasons(affiliateClubs, affiliateRosterByClubId, rng);
   const playoffResult = simulatePlayoffs(
     teams,
@@ -274,6 +294,9 @@ function computeFreshSeason1State() {
     seasonResult.streakStateById,
     rng
   );
+  // Playoff fold — covers every series: both leagues' WC Round + LCS, the
+  // Finals, and the MLB2 Championship (all at K_CONTEXT.LEAGUE_PLAYOFFS).
+  quotientByTeamId = foldPlayoffResult(quotientByTeamId, playoffResult);
 
   // Season 1 gets a real draft too, same as playoffs — using its own
   // just-finished standings/playoff result. Draftees are signed straight
@@ -329,6 +352,7 @@ function computeFreshSeason1State() {
     internationalFreeAgentPoolById,
     internationalDraftResult,
     establishedFreeAgentPoolById,
+    quotientByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
@@ -385,6 +409,13 @@ export function advanceToNextSeason(state) {
 
   const rng = seasonRngForNumber(seasonNumber);
 
+  // Decay — once per NEW season, before this season's own games run, using
+  // ratings as they stood at the end of the PRIOR season (state.quotientByTeamId
+  // already has that prior season's own regular-season + playoff folds
+  // applied, from when `state` was first produced). Every club decays
+  // regardless of activity.
+  let quotientByTeamId = decayQuotientsForNewSeason(state.quotientByTeamId);
+
   const { rosterByTeamId, managerByTeamId } = advanceOffseason(
     teamsForNextSeason,
     state.rosterByTeamId,
@@ -401,6 +432,7 @@ export function advanceToNextSeason(state) {
     (id) => managerByTeamId.get(id),
     rng
   );
+  quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
 
   // Minor League seasons for the year just entered — run AFTER the call-up
   // cascade above (so this season's affiliate rosters already reflect any
@@ -421,6 +453,7 @@ export function advanceToNextSeason(state) {
     seasonResult.streakStateById,
     rng
   );
+  quotientByTeamId = foldPlayoffResult(quotientByTeamId, playoffResult);
 
   // The draft (and the College System pathway alongside it) is likewise
   // THIS new season's own culmination — using the standings/playoff result
@@ -495,6 +528,7 @@ export function advanceToNextSeason(state) {
     internationalFreeAgentPoolById: state.internationalFreeAgentPoolById,
     internationalDraftResult,
     establishedFreeAgentPoolById: state.establishedFreeAgentPoolById,
+    quotientByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
