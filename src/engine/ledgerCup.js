@@ -242,13 +242,151 @@ export function computeCupAdvancement(groups, cupGroupStandingsById) {
   return { advancingTeamIds };
 }
 
+// Knockout — Phase 3b. 4 rounds of best-of-3 (Play-In, Round of 16,
+// Quarterfinal, Semifinal) plus a single-game Final, per
+// in-season-tournament.md. Matches engine/calendar.js's own header comment
+// naming {4, 3} as the real blackout counts this arc would eventually pass
+// — 4 H1 blackout weeks for the 4 best-of-3 rounds, spread per
+// buildSeasonWeekPlan's existing spreadEvenly (no changes needed there).
+export const KNOCKOUT_GAMES_TO_WIN = 2; // best-of-3
+export const FINAL_GAMES_TO_WIN = 1; // single game
+
+// No tiebreaker is specced for reseeding either — reuses the exact same
+// win% -> run differential -> team-id convention compareStanding already
+// established for group-stage advancement.
+export function reseedForKnockout(advancingTeamIds, cupGroupStandingsById) {
+  return [...advancingTeamIds].sort((a, b) => compareStanding(a, b, cupGroupStandingsById));
+}
+
+/**
+ * Builds the STATIC part of the bracket — seeds 1-8's byes and the 8
+ * Play-In pairs (9v24, 10v23, ... 16v17, per in-season-tournament.md).
+ * Doesn't resolve Round of 16/Quarterfinal/Semifinal/Final, since those
+ * depend on winners not yet known — engine/ledgerCup.js's orchestrator
+ * resolves those round-by-round as it plays them (see
+ * simulateKnockoutRound/consecutivePairs below). Pure, no rng.
+ * @param {string[]} seeds - exactly 24 team ids, index 0 = seed 1 (best) ... index 23 = seed 24, from reseedForKnockout
+ * @returns {{seeds: string[], byes: {seed: number, teamId: string}[], playInPairs: {seedA: number, teamIdA: string, seedB: number, teamIdB: string}[]}}
+ */
+export function buildKnockoutBracket(seeds) {
+  if (seeds.length !== 24) throw new Error(`buildKnockoutBracket: expected exactly 24 seeds, got ${seeds.length}`);
+  const byes = seeds.slice(0, 8).map((teamId, i) => ({ seed: i + 1, teamId }));
+  // Which bye seed a Play-In winner joins in Round of 16 isn't specced —
+  // resolved as the natural 1:1 mapping: Play-In match k's winner (seed
+  // 9+k or its opponent) plays bye seed k+1.
+  const playInPairs = Array.from({ length: 8 }, (_, k) => ({
+    seedA: 9 + k, teamIdA: seeds[8 + k],
+    seedB: 24 - k, teamIdB: seeds[23 - k],
+  }));
+  return { seeds, byes, playInPairs };
+}
+
+// Lower seed NUMBER = higher seed = hosts every game of the series, per
+// in-season-tournament.md's venue rule ("all games at the higher seed's
+// home park... not split/alternating, unlike a typical MLB postseason
+// format") — deliberately NOT engine/playoffs.js's alternating
+// HOME_PATTERN_BY_GAMES_TO_WIN, a different, simpler rule this doc
+// specifically calls out.
+function seriesHomeAway(participantA, participantB) {
+  return participantA.seed < participantB.seed
+    ? { home: participantA, away: participantB }
+    : { home: participantB, away: participantA };
+}
+
+/**
+ * Plays one best-of-`gamesToWin` Cup series ONE GAME AT A TIME via
+ * simulateGamesIntoState against the SHARED live season state — unlike
+ * engine/playoffs.js's simulateBestOfSeries (architected for the
+ * discardable, after-the-season-ends case, with its own local working
+ * copies of injury/fatigue state that are thrown away once the series
+ * ends), this threads injuries/fatigue/streaks into the SAME Maps the rest
+ * of the season reads and writes, so they carry forward into whatever
+ * regular-season week comes next — the same fidelity requirement
+ * buildCupGroupStageWeekends' games already satisfy.
+ * @param {object} seasonState
+ * @param {object[]} teams
+ * @param {(teamId: string) => object} getTeamRoster
+ * @param {{seed: number, teamId: string}} participantA
+ * @param {{seed: number, teamId: string}} participantB
+ * @param {number} gamesToWin - KNOCKOUT_GAMES_TO_WIN (2) or FINAL_GAMES_TO_WIN (1)
+ * @param {() => number} rng
+ * @param {Map<string, number>} cupRotationIndexById
+ * @returns {{homeTeamId: string, awayTeamId: string, gamesToWin: number, games: object[], winner: {seed: number, teamId: string}}}
+ */
+export function simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, participantA, participantB, gamesToWin, rng, cupRotationIndexById) {
+  const { home, away } = seriesHomeAway(participantA, participantB);
+  let winsHome = 0;
+  let winsAway = 0;
+  const games = [];
+  let gameIndex = 0;
+
+  while (winsHome < gamesToWin && winsAway < gamesToWin) {
+    const [game] = simulateGamesIntoState(
+      seasonState, teams, getTeamRoster,
+      [{ gameNumber: gameIndex, awayTeamId: away.teamId, homeTeamId: home.teamId }],
+      rng,
+      { trackStandings: false, trackManagerLifecycle: false, trackSeasonStats: false, rotationIndexById: cupRotationIndexById }
+    );
+    games.push(game);
+    if (game.awayRuns > game.homeRuns) winsAway++;
+    else winsHome++;
+    gameIndex++;
+  }
+
+  return { homeTeamId: home.teamId, awayTeamId: away.teamId, gamesToWin, games, winner: winsHome >= gamesToWin ? home : away };
+}
+
+/**
+ * Runs every series in one knockout round against the shared live state.
+ * @param {object} seasonState
+ * @param {object[]} teams
+ * @param {(teamId: string) => object} getTeamRoster
+ * @param {[{seed: number, teamId: string}, {seed: number, teamId: string}][]} pairs
+ * @param {number} gamesToWin
+ * @param {() => number} rng
+ * @param {Map<string, number>} cupRotationIndexById
+ * @returns {{series: object[], winners: {seed: number, teamId: string}[]}} winners preserve pairs' order — feed directly into the next round's consecutivePairs()
+ */
+export function simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, gamesToWin, rng, cupRotationIndexById) {
+  const series = [];
+  const winners = [];
+  for (const [a, b] of pairs) {
+    const result = simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, a, b, gamesToWin, rng, cupRotationIndexById);
+    series.push(result);
+    winners.push(result.winner);
+  }
+  return { series, winners };
+}
+
+// QF/SF/Final pairing isn't specced beyond "fixed bracket, no reseeding" —
+// resolved with the simplest structure that satisfies that literally: pair
+// consecutive winners from the previous round (match1 vs match2, match3 vs
+// match4, ...), same convention at every round including Round of 16 (see
+// interleaveByesWithPlayInWinners below, which builds R16's own ordered
+// input list so THIS same function produces bye-k-vs-PlayInWinner-k).
+function consecutivePairs(participants) {
+  const pairs = [];
+  for (let i = 0; i < participants.length; i += 2) pairs.push([participants[i], participants[i + 1]]);
+  return pairs;
+}
+
+// Interleaves [bye1, playInWinner1, bye2, playInWinner2, ...] so that
+// consecutivePairs() on the result produces exactly (bye_k vs
+// playInWinner_k) — the R16 pairing convention buildKnockoutBracket's own
+// header already commits to.
+function interleaveByesWithPlayInWinners(byes, playInWinners) {
+  const participants = [];
+  for (let i = 0; i < byes.length; i++) participants.push(byes[i], playInWinners[i]);
+  return participants;
+}
+
 /**
  * The orchestrator: runs a full season's regular-season schedule AND (when
- * `cupGroups` is supplied) its 3 H2 group-stage weekends through the SAME
- * live season state, in true week order — the real fidelity requirement
- * this whole phase exists for. When `cupGroups` is null (no Quotient
- * history yet to draw from, or simply no Cup activity this season), this
- * degrades to running the exact same open-weeks-only path
+ * supplied) a Cup group stage (H2) and/or a pending knockout bracket (H1 +
+ * the Final at the All-Star week) through the SAME live season state, in
+ * true week order — the real fidelity requirement this whole phase exists
+ * for. When both `cupGroups` and `cupKnockout` are null, this degrades to
+ * running the exact same open-weeks-only path
  * engine/leagueProgression.js's simulateOneSeason runs today, at the same
  * rng seed — byte-identical, same proof technique Phase 1's calendar layer
  * used for its own no-op case.
@@ -256,25 +394,45 @@ export function computeCupAdvancement(groups, cupGroupStandingsById) {
  * @param {(teamId: string) => object} getTeamRoster
  * @param {(teamId: string) => object|null} getTeamManager
  * @param {() => number} rng
- * @param {{groups: string[][]}|null} cupGroups - from drawCupGroups, or null for no Cup activity this season
+ * @param {{groups: string[][]}|null} cupGroups - from drawCupGroups, or null for no group stage this season
+ * @param {{seeds: string[], byes: object[], playInPairs: object[]}|null} cupKnockout - from buildKnockoutBracket, or null for no pending knockout this season
  * @param {number} [gamesPerSeason]
- * @returns {{schedule: object[], weekPlan: object, seasonResult: object, cupGroupResults: object[]|null}}
- *   cupGroupResults is the flat array of every Cup group-stage game played this season (null when cupGroups was
- *   null) — NOT included in seasonResult.results, so a caller folding it into Quotient must do so separately, at
- *   K_CONTEXT.CUP_GROUP_STAGE (see engine/tournamentQuotient.js's foldResultsArray).
+ * @returns {{schedule: object[], weekPlan: object, seasonResult: object, cupGroupResults: object[]|null, cupKnockoutResult: object|null}}
+ *   cupGroupResults/cupKnockoutResult's games are the flat/nested arrays of every Cup game played this season —
+ *   NOT included in seasonResult.results, so a caller folding them into Quotient must do so separately (see
+ *   engine/tournamentQuotient.js's foldResultsArray, at K_CONTEXT.CUP_GROUP_STAGE/CUP_KNOCKOUT respectively).
  */
-export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng, cupGroups, gamesPerSeason = TARGET_GAMES_PER_TEAM) {
-  const calendarOptions = cupGroups ? { secondHalfBlackoutWeeks: GROUP_STAGE_WEEKENDS } : {};
+export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng, cupGroups, cupKnockout = null, gamesPerSeason = TARGET_GAMES_PER_TEAM) {
+  const calendarOptions = {
+    ...(cupKnockout ? { firstHalfBlackoutWeeks: 4 } : {}),
+    ...(cupGroups ? { secondHalfBlackoutWeeks: GROUP_STAGE_WEEKENDS } : {}),
+  };
   const { schedule, weekPlan } = buildCalendarSeasonSchedule(teams, gamesPerSeason, rng, calendarOptions);
   const seasonState = createSeasonState(teams, getTeamManager);
 
   const cupWeekends = cupGroups ? buildCupGroupStageWeekends(teams, cupGroups.groups, rng).weekends : null;
-  // A separate, LOCAL rotation counter for Cup games — matching
-  // engine/playoffs.js's own established precedent (a team's regular
-  // rotation cycle shouldn't be skewed by however many Cup games
-  // interrupted it).
-  const cupRotationIndexById = cupGroups ? new Map(teams.map((t) => [t.id, 0])) : null;
+  // Separate, LOCAL rotation counters for group-stage and knockout games —
+  // matching engine/playoffs.js's own established precedent (a team's
+  // regular rotation cycle shouldn't be skewed by however many Cup games
+  // interrupted it). Kept distinct from each other too, since a team could
+  // in principle be involved in both within the same season.
+  const cupGroupRotationIndexById = cupGroups ? new Map(teams.map((t) => [t.id, 0])) : null;
+  const cupKnockoutRotationIndexById = cupKnockout ? new Map(teams.map((t) => [t.id, 0])) : null;
   const cupGroupResults = cupGroups ? [] : null;
+
+  // Knockout round-tracking state, carried across loop iterations as each
+  // H1 blackout week resolves the next round and feeds its winners into
+  // the following one — the real sequencing dependency Phase 1's header
+  // flagged as unsolved ("knockout rounds depend on the previous round's
+  // winners, a real sequencing dependency a single flat schedule array
+  // can't express"). One dedicated variable per round — NOT reused across
+  // rounds — so a later round's result can never silently clobber an
+  // earlier round's already-recorded series.
+  let playInResult = null;
+  let roundOf16Result = null;
+  let quarterfinalResult = null;
+  let semifinalResult = null;
+  let finalResult = null;
 
   const scheduleByWeek = new Map();
   for (const game of schedule) {
@@ -283,27 +441,64 @@ export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng,
   }
 
   let cupWeekendIndex = 0;
+  let knockoutRoundIndex = 0; // 0=Play-In, 1=Round of 16, 2=Quarterfinal, 3=Semifinal
+
   for (const week of weekPlan.weeks) {
-    if (week.kind === 'BLACKOUT') {
-      // Only the group stage exists this phase (Phase 3b adds knockout
-      // blackout weeks in H1) — every blackout week reached here is one of
-      // the 3 H2 group-stage weekends, in the same front-loaded order
-      // buildSeasonWeekPlan already produces them in.
+    if (week.kind === 'BLACKOUT' && week.half === 'H2') {
+      // Every H2 blackout week is a group-stage weekend, in the same
+      // front-loaded order buildSeasonWeekPlan already produces them in.
       const weekendGames = cupWeekends[cupWeekendIndex];
       cupWeekendIndex++;
       const batch = simulateGamesIntoState(seasonState, teams, getTeamRoster, weekendGames, rng, {
         trackStandings: false,
         trackManagerLifecycle: false,
         trackSeasonStats: false,
-        rotationIndexById: cupRotationIndexById,
+        rotationIndexById: cupGroupRotationIndexById,
       });
       cupGroupResults.push(...batch);
+    } else if (week.kind === 'BLACKOUT' && week.half === 'H1') {
+      // Every H1 blackout week resolves the NEXT pending knockout round,
+      // in order — spread through H1 per buildSeasonWeekPlan's own
+      // spreadEvenly, not necessarily evenly-spaced calendar days, but
+      // always encountered in ascending week order here.
+      if (knockoutRoundIndex === 0) {
+        const pairs = cupKnockout.playInPairs.map((p) => [
+          { seed: p.seedA, teamId: p.teamIdA },
+          { seed: p.seedB, teamId: p.teamIdB },
+        ]);
+        playInResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      } else if (knockoutRoundIndex === 1) {
+        const participants = interleaveByesWithPlayInWinners(cupKnockout.byes, playInResult.winners);
+        roundOf16Result = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(participants), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      } else if (knockoutRoundIndex === 2) {
+        quarterfinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(roundOf16Result.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      } else if (knockoutRoundIndex === 3) {
+        semifinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(quarterfinalResult.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      }
+      knockoutRoundIndex++;
+    } else if (week.kind === 'ALL_STAR' && cupKnockout) {
+      // The single-game Final, the day before the All-Star Game per
+      // in-season-tournament.md.
+      const [finalA, finalB] = semifinalResult.winners;
+      const result = simulateKnockoutRound(seasonState, teams, getTeamRoster, [[finalA, finalB]], FINAL_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      finalResult = result.series[0];
     } else if (week.kind === 'OPEN') {
       const weekGames = scheduleByWeek.get(week.index) ?? [];
       simulateGamesIntoState(seasonState, teams, getTeamRoster, weekGames, rng);
     }
-    // ALL_STAR weeks: nothing scheduled this phase (the single-game Final lands here in Phase 3b).
   }
+
+  const cupKnockoutResult = cupKnockout
+    ? {
+        seeds: cupKnockout.seeds,
+        playIn: playInResult.series,
+        roundOf16: roundOf16Result.series,
+        quarterfinal: quarterfinalResult.series,
+        semifinal: semifinalResult.series,
+        final: finalResult,
+        championTeamId: finalResult?.winner.teamId ?? null,
+      }
+    : null;
 
   const seasonResult = {
     standingsById: seasonState.standingsById,
@@ -318,5 +513,5 @@ export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng,
     results: seasonState.results,
   };
 
-  return { schedule, weekPlan, seasonResult, cupGroupResults };
+  return { schedule, weekPlan, seasonResult, cupGroupResults, cupKnockoutResult };
 }

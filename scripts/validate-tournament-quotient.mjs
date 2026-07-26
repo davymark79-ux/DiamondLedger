@@ -178,7 +178,7 @@ console.log('\n=== 6. Real season-1 bootstrap wiring ===\n');
   const withDecay = decayQuotientsForNewSeason(expected);
   assert(sortedEntriesJson(state.quotientByTeamId) !== sortedEntriesJson(withDecay), 'season 1 correctly did NOT apply a decay step (no prior season exists to decay from)');
 
-  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 11, `schemaVersion is the current STATE_SCHEMA_VERSION, 11 (got ${state.schemaVersion})`);
+  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 12, `schemaVersion is the current STATE_SCHEMA_VERSION, 12 (got ${state.schemaVersion})`);
 
   const keys = [...state.quotientByTeamId.keys()].sort();
   const expectedKeys = teams.map((t) => t.id).sort();
@@ -218,6 +218,35 @@ console.log('\n=== 7. Real multi-season wiring: decay + Cup group-stage fold gen
   const keys1 = [...state1.quotientByTeamId.keys()].sort();
   const keys2 = [...state2.quotientByTeamId.keys()].sort();
   assert(JSON.stringify(keys1) === JSON.stringify(keys2), 'the same 50 team ids persist across a season transition — nothing added or dropped');
+}
+
+console.log('\n=== 8. Real 3-season wiring: the Cup Knockout fold genuinely applied ("The Ledger Cup" arc, Phase 3b) ===\n');
+{
+  // Season 3 is the first season with a real knockout to resolve (reseeded
+  // from season 2's own just-finished group stage) — same "skip this step,
+  // prove it changes the result" technique section 7 already had to adopt,
+  // since a knockout draw/bracket also sits inside advanceToNextSeason's
+  // own rng-consuming call sequence.
+  const state1 = computeFreshSeason1State();
+  const state2 = advanceToNextSeason(state1);
+  const state3 = advanceToNextSeason(state2);
+
+  assert(state3.cupState.knockout.phase === 'COMPLETE', 'season 3 resolves a real knockout — the precondition for this section to mean anything');
+
+  let noKnockout = decayQuotientsForNewSeason(state2.quotientByTeamId);
+  noKnockout = foldRegularSeasonResults(noKnockout, state3.seasonResult.results);
+  noKnockout = foldPlayoffResult(noKnockout, state3.playoffResult);
+  // Deliberately omits the group-stage fold too (K_CONTEXT.CUP_GROUP_STAGE) —
+  // this comparison only needs to prove SOMETHING besides decay/regular/
+  // playoffs moved state3 away from this baseline; it doesn't need to
+  // isolate the knockout fold from the group-stage fold specifically.
+  assert(
+    sortedEntriesJson(state3.quotientByTeamId) !== sortedEntriesJson(noKnockout),
+    'skipping the Cup Knockout fold (plus the Cup group-stage fold, both real steps season 3 actually takes) produces a DIFFERENT result than the real wiring'
+  );
+
+  assert([...state3.quotientByTeamId.values()].every((v) => v >= QUOTIENT_FLOOR && v <= QUOTIENT_CEILING), 'every value stays within [20, 100] after a season with a real knockout run');
+  assert(state3.quotientByTeamId.size === 50, 'still exactly 50 team ids after 3 real season transitions, the last two both Cup-active');
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

@@ -511,7 +511,17 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
   for (const game of games) {
     const awayTeam = teamsById.get(game.awayTeamId);
     const homeTeam = teamsById.get(game.homeTeamId);
-    const dhRule = LEAGUES[awayTeam.leagueId].dhRule; // same league for both sides, guaranteed by grouping
+    // HOME team's league decides the DH rule (real historical MLB practice —
+    // AL park = DH, NL park = no DH — same convention engine/playoffs.js's
+    // Finals already uses). For the regular season this is byte-identical
+    // to reading either team's league (away/home are always same-league,
+    // "guaranteed by grouping" — unchanged from before). It matters for
+    // real cross-league games, which only exist starting with the Ledger
+    // Cup's group stage/knockout ("The Ledger Cup" arc) — a real latent bug
+    // fixed here: this line originally read awayTeam's league, silently
+    // applying the wrong team's DH rule to every cross-league Cup game
+    // shipped in Phase 3a before this fix.
+    const dhRule = LEAGUES[homeTeam.leagueId].dhRule;
 
     const awayFullRoster = getTeamRoster(game.awayTeamId);
     const homeFullRoster = getTeamRoster(game.homeTeamId);

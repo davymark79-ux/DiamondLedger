@@ -1,5 +1,6 @@
 // Re-runnable sanity check for The Ledger Cup — Phase 3 of "The Ledger Cup"
-// build arc, Group Stage half (engine/ledgerCup.js + engine/season.js's
+// build arc, both the Group Stage half (3a) and the Knockout Bracket half
+// (3b) (engine/ledgerCup.js + engine/season.js's
 // createSeasonState/simulateGamesIntoState split): `npm run validate:cup`.
 // Same style as the other validate:* scripts — eyeball checks plus hard
 // asserts on structural invariants.
@@ -11,6 +12,11 @@ import {
   buildCupGroupStandings,
   computeCupAdvancement,
   simulateSeasonWithCup,
+  buildKnockoutBracket,
+  simulateCupSeriesIntoState,
+  simulateKnockoutRound,
+  KNOCKOUT_GAMES_TO_WIN,
+  FINAL_GAMES_TO_WIN,
   GROUP_STAGE_GAMES_PER_TEAM,
 } from '../src/engine/ledgerCup.js';
 import { createSeasonState, simulateGamesIntoState } from '../src/engine/season.js';
@@ -220,21 +226,24 @@ console.log('\n=== 6. simulateSeasonWithCup: no-Cup path is byte-identical to th
 
   const rng2 = createRng(7);
   const withCupModule = await import('../src/engine/ledgerCup.js');
-  const noCup = withCupModule.simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng2, null, 150);
+  const noCup = withCupModule.simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng2, null, null, 150);
 
-  assert(JSON.stringify(baseline.seasonResult.results) === JSON.stringify(noCup.seasonResult.results), 'results are byte-identical between simulateOneSeason and simulateSeasonWithCup(..., null)');
+  assert(JSON.stringify(baseline.seasonResult.results) === JSON.stringify(noCup.seasonResult.results), 'results are byte-identical between simulateOneSeason and simulateSeasonWithCup(..., null, null)');
   assert(noCup.cupGroupResults === null, 'cupGroupResults is null when no Cup group draw is active');
+  assert(noCup.cupKnockoutResult === null, 'cupKnockoutResult is null when no knockout bracket is pending');
 }
 
 console.log('\n=== 7. Real data/season.js wiring: season 1 has no Cup, season 2 runs a real group stage ===\n');
 {
-  assert(computeFreshSeason1State().cupState.phase === 'NONE', 'season 1 cupState.phase is NONE (no Quotient history to draw pots from yet)');
+  assert(computeFreshSeason1State().cupState.groupStagePhase === 'NONE', 'season 1 cupState.groupStagePhase is NONE (no Quotient history to draw pots from yet)');
+  assert(computeFreshSeason1State().cupState.knockout.phase === 'NONE', 'season 1 cupState.knockout.phase is NONE too (nothing to reseed from)');
 
   const season2 = advanceToNextSeason(computeFreshSeason1State());
-  assert(season2.cupState.phase === 'GROUP_STAGE', `season 2 runs a real group stage (got phase=${season2.cupState.phase})`);
+  assert(season2.cupState.groupStagePhase === 'GROUP_STAGE', `season 2 runs a real group stage (got groupStagePhase=${season2.cupState.groupStagePhase})`);
   assert(season2.cupState.groups.length === 10, '10 groups persisted in cupState');
   assert(season2.cupState.cupGroupStandingsById.size === 50, 'all 50 teams have real Cup group standings persisted');
   assert(season2.cupState.advancingTeamIds.length === 24 && new Set(season2.cupState.advancingTeamIds).size === 24, '24 distinct advancing teams persisted');
+  assert(season2.cupState.knockout.phase === 'NONE', 'season 2 itself has NO knockout yet (season 1 had no group stage to reseed from)');
 
   const liveTeams = applyLiveOverrides(teams, season2.tierByTeamId, season2.divisionByTeamId);
   const teamsById = new Map(liveTeams.map((t) => [t.id, t]));
@@ -246,6 +255,104 @@ console.log('\n=== 7. Real data/season.js wiring: season 1 has no Cup, season 2 
   assert(compositionOk, 'every persisted group is 3 MLB1 + 2 MLB2 against season 2\'s OWN live (post-promotion/relegation) tiers');
 
   assert(season2.quotientByTeamId.size === 50, 'quotientByTeamId still has exactly 50 entries after a Cup-active season (regular season + Cup group folds, no drift)');
+}
+
+console.log('\n=== 8. buildKnockoutBracket: structure on a hand-built 24-seed fixture ===\n');
+{
+  const seeds = Array.from({ length: 24 }, (_, i) => `s${i + 1}`);
+  const bracket = buildKnockoutBracket(seeds);
+
+  assert(bracket.byes.length === 8, `8 byes for seeds 1-8 (got ${bracket.byes.length})`);
+  assert(bracket.byes.every((b, i) => b.seed === i + 1 && b.teamId === `s${i + 1}`), 'byes are seeds 1-8, in order, unchanged from the input');
+  assert(bracket.playInPairs.length === 8, `8 Play-In pairs (got ${bracket.playInPairs.length})`);
+  const expectedPairs = [[9, 24], [10, 23], [11, 22], [12, 21], [13, 20], [14, 19], [15, 18], [16, 17]];
+  const pairsMatch = bracket.playInPairs.every((p, i) => p.seedA === expectedPairs[i][0] && p.seedB === expectedPairs[i][1]);
+  assert(pairsMatch, 'Play-In pairs are exactly 9v24, 10v23, 11v22, ... 16v17, in that order, per in-season-tournament.md');
+
+  let threw = false;
+  try {
+    buildKnockoutBracket(seeds.slice(0, 20));
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'buildKnockoutBracket rejects anything other than exactly 24 seeds');
+}
+
+console.log('\n=== 9. Knockout series/round simulation: fixed home team, correct termination, correct pairing ===\n');
+{
+  const rng = createRng(9001);
+  const seasonState = createSeasonState(teams, getTeamManager);
+  const cupKnockoutRotationIndexById = new Map(teams.map((t) => [t.id, 0]));
+  const [teamA, teamB] = teams;
+  const participantA = { seed: 3, teamId: teamA.id }; // higher seed (lower number) -> should host every game
+  const participantB = { seed: 20, teamId: teamB.id };
+
+  const series = simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, participantA, participantB, KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+  assert(series.homeTeamId === teamA.id, 'the HIGHER seed (lower seed number) hosts, matching the doc\'s fixed-home-park venue rule');
+  assert(series.games.every((g) => g.homeTeamId === teamA.id), 'every game in the series uses the SAME fixed home team, not an alternating pattern (unlike engine/playoffs.js)');
+  assert(series.games.length === KNOCKOUT_GAMES_TO_WIN || series.games.length === KNOCKOUT_GAMES_TO_WIN + 1, `a best-of-3 series plays 2 or 3 games (got ${series.games.length})`);
+  assert(series.winner.teamId === teamA.id || series.winner.teamId === teamB.id, 'the winner is one of the two real participants');
+
+  const finalSeries = simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, participantA, participantB, FINAL_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+  assert(finalSeries.games.length === 1, `FINAL_GAMES_TO_WIN=1 plays exactly a single game (got ${finalSeries.games.length})`);
+
+  // A full round (4 series at once, matching a real Quarterfinal's size) —
+  // confirms simulateKnockoutRound's winners array preserves pair order,
+  // ready to feed straight into the next round's consecutivePairs().
+  const pairs = [
+    [{ seed: 1, teamId: teams[0].id }, { seed: 8, teamId: teams[1].id }],
+    [{ seed: 4, teamId: teams[2].id }, { seed: 5, teamId: teams[3].id }],
+    [{ seed: 2, teamId: teams[4].id }, { seed: 7, teamId: teams[5].id }],
+    [{ seed: 3, teamId: teams[6].id }, { seed: 6, teamId: teams[7].id }],
+  ];
+  const round = simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+  assert(round.series.length === 4 && round.winners.length === 4, `a 4-series round returns 4 series and 4 winners (got ${round.series.length}/${round.winners.length})`);
+  const winnersAreParticipants = round.winners.every((w, i) => w.teamId === pairs[i][0].teamId || w.teamId === pairs[i][1].teamId);
+  assert(winnersAreParticipants, 'every winner in the returned array is one of ITS OWN pair\'s two participants, in the same order as the input pairs');
+}
+
+console.log('\n=== 10. Quotient folding: Cup knockout games use CUP_KNOCKOUT, the highest of the three ===\n');
+{
+  assert(K_CONTEXT.CUP_KNOCKOUT > K_CONTEXT.CUP_GROUP_STAGE && K_CONTEXT.CUP_KNOCKOUT > K_CONTEXT.REGULAR_SEASON, 'sanity: CUP_KNOCKOUT weighs more than both CUP_GROUP_STAGE and REGULAR_SEASON (per tournament-quotient.md)');
+  const knockoutResults = [
+    { gameNumber: 0, awayTeamId: 'x', homeTeamId: 'y', awayRuns: 5, homeRuns: 2 },
+    { gameNumber: 1, awayTeamId: 'x', homeTeamId: 'y', awayRuns: 3, homeRuns: 6 },
+  ];
+  const base = new Map([['x', QUOTIENT_CENTER], ['y', QUOTIENT_CENTER]]);
+  const asGroupStage = foldResultsArray(base, knockoutResults, K_CONTEXT.CUP_GROUP_STAGE);
+  const asKnockout = foldResultsArray(base, knockoutResults, K_CONTEXT.CUP_KNOCKOUT);
+  assert(asKnockout.get('x') !== asGroupStage.get('x'), 'the SAME game result folded at CUP_KNOCKOUT produces a genuinely different rating than at CUP_GROUP_STAGE');
+}
+
+console.log('\n=== 11. Real data/season.js wiring: season 3 is the first real knockout (reseeded from season 2\'s group stage) ===\n');
+{
+  const season1 = computeFreshSeason1State();
+  const season2 = advanceToNextSeason(season1);
+  const t0 = Date.now();
+  const season3 = advanceToNextSeason(season2);
+  console.log(`  (season 3 transition took ${((Date.now() - t0) / 1000).toFixed(1)}s — real cost of a full group stage + full knockout bracket)`);
+
+  assert(season3.cupState.groupStagePhase === 'GROUP_STAGE', 'season 3 also runs its OWN fresh group stage (unconditional from season 2 onward)');
+  assert(season3.cupState.knockout.phase === 'COMPLETE', `season 3 resolves a real knockout, reseeded from season 2's group stage (got phase=${season3.cupState.knockout.phase})`);
+  assert(season3.cupState.knockout.seeds.length === 24 && new Set(season3.cupState.knockout.seeds).size === 24, '24 distinct reseeded team ids persisted');
+  assert(
+    JSON.stringify([...season3.cupState.knockout.seeds].sort()) === JSON.stringify([...season2.cupState.advancingTeamIds].sort()),
+    'the reseeded 24 are EXACTLY season 2\'s own 24 advancing teams (just reordered by tournament record), not a different pool'
+  );
+  assert(season3.cupState.knockout.playIn.length === 8 && season3.cupState.knockout.roundOf16.length === 8, 'Play-In (8 series) and Round of 16 (8 series) both fully resolved');
+  assert(season3.cupState.knockout.quarterfinal.length === 4 && season3.cupState.knockout.semifinal.length === 2, 'Quarterfinal (4 series) and Semifinal (2 series) both fully resolved');
+  assert(!!season3.cupState.knockout.final && season3.cupState.knockout.final.games.length === 1, 'a real single-game Final was played');
+  assert(
+    season3.cupState.knockout.championTeamId === season3.cupState.knockout.final.winner.teamId,
+    'championTeamId matches the Final\'s own recorded winner'
+  );
+
+  const allChampionshipParticipants = new Set([
+    ...season3.cupState.knockout.playIn.flatMap((s) => [s.homeTeamId, s.awayTeamId]),
+  ]);
+  assert(allChampionshipParticipants.size <= 16 && allChampionshipParticipants.size > 0, 'Play-In participants are drawn from the real 16-team Play-In pool (seeds 9-24)');
+
+  assert(season3.quotientByTeamId.size === 50, 'quotientByTeamId still has exactly 50 entries after a season with BOTH a group stage and a knockout run (regular + group + knockout folds, no drift)');
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);
