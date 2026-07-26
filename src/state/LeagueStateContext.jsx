@@ -425,6 +425,7 @@ export function LeagueStateProvider({ children }) {
     results: state.seasonResult.results,
     promotionRelegationSwaps: state.promotionRelegationSwaps,
     playoffResult: state.playoffResult,
+    cupState: state.cupState,
     getTeamRoster,
     getTeamRecord,
     getTeamResults,
