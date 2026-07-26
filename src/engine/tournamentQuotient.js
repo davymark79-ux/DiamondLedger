@@ -83,21 +83,38 @@ export function foldGameOutcome(quotientByTeamId, winnerTeamId, loserTeamId, kCo
 }
 
 /**
- * Folds engine/season.js's simulateSeason() `results` array (no
- * winnerTeamId field there — derived via awayRuns > homeRuns).
+ * Folds any engine/season.js-`results`-shaped array (no winnerTeamId field
+ * there — derived via awayRuns > homeRuns) at a given K_context. Exported
+ * standalone ("The Ledger Cup" arc, Phase 3) so engine/ledgerCup.js's group
+ * stage — which produces this exact same flat results shape via
+ * simulateGamesIntoState, just not appended to the season's own canonical
+ * results log — can fold at K_CONTEXT.CUP_GROUP_STAGE without duplicating
+ * the win/loss derivation logic.
  * @param {Map<string, number>} quotientByTeamId
- * @param {object[]} results - simulateSeason()'s returned `results` array
+ * @param {object[]} results - a simulateSeason()/simulateGamesIntoState()-shaped results array
+ * @param {number} kContext - one of K_CONTEXT's values
  * @returns {Map<string, number>} new Map
  */
-export function foldRegularSeasonResults(quotientByTeamId, results) {
+export function foldResultsArray(quotientByTeamId, results, kContext) {
   let next = quotientByTeamId;
   for (const game of results) {
     const awayWon = game.awayRuns > game.homeRuns;
     const winnerTeamId = awayWon ? game.awayTeamId : game.homeTeamId;
     const loserTeamId = awayWon ? game.homeTeamId : game.awayTeamId;
-    next = foldGameOutcome(next, winnerTeamId, loserTeamId, K_CONTEXT.REGULAR_SEASON);
+    next = foldGameOutcome(next, winnerTeamId, loserTeamId, kContext);
   }
   return next;
+}
+
+/**
+ * Folds engine/season.js's simulateSeason() `results` array at
+ * K_CONTEXT.REGULAR_SEASON — a thin wrapper over foldResultsArray above.
+ * @param {Map<string, number>} quotientByTeamId
+ * @param {object[]} results - simulateSeason()'s returned `results` array
+ * @returns {Map<string, number>} new Map
+ */
+export function foldRegularSeasonResults(quotientByTeamId, results) {
+  return foldResultsArray(quotientByTeamId, results, K_CONTEXT.REGULAR_SEASON);
 }
 
 /**

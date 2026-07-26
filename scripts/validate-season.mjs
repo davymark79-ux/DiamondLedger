@@ -4,7 +4,7 @@
 // invariants.
 
 import { teams, getTeamRoster } from '../src/data/realLeague.js';
-import { buildSeasonSchedule, simulateSeason, TARGET_GAMES_PER_TEAM } from '../src/engine/season.js';
+import { buildSeasonSchedule, simulateSeason, createSeasonState, simulateGamesIntoState, TARGET_GAMES_PER_TEAM } from '../src/engine/season.js';
 import { createRng } from '../src/models/generation/random.js';
 import { LEAGUES, TIERS, LEAGUE_IDS } from '../src/models/constants.js';
 
@@ -130,6 +130,47 @@ for (const r of sampleResults) {
   const away = teamsById.get(r.awayTeamId);
   const home = teamsById.get(r.homeTeamId);
   console.log(`  ${away.nickname} ${r.awayRuns} @ ${home.nickname} ${r.homeRuns}`);
+}
+
+console.log('\n=== 9. simulateSeason refactor: byte-identical regression ("The Ledger Cup" arc, Phase 3) ===\n');
+// simulateSeason is now a thin wrapper over createSeasonState + simulateGamesIntoState
+// (see engine/season.js's own header on these two) — this proves the split didn't change
+// a single bit of output at a fixed seed, same technique validate:calendar's section 5
+// already used to prove the calendar layer was a true no-op.
+function mapToSortedEntries(map) {
+  return [...map.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+{
+  const directRng = createRng(7);
+  const directSchedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, directRng);
+  const direct = simulateSeason(teams, getTeamRoster, directSchedule, directRng);
+
+  const splitRng = createRng(7);
+  const splitSchedule = buildSeasonSchedule(teams, TARGET_GAMES_PER_TEAM, splitRng);
+  const seasonState = createSeasonState(teams);
+  simulateGamesIntoState(seasonState, teams, getTeamRoster, splitSchedule, splitRng);
+
+  assert(
+    JSON.stringify(direct.results) === JSON.stringify(seasonState.results),
+    'results arrays are byte-identical between simulateSeason and a direct createSeasonState+simulateGamesIntoState call'
+  );
+  assert(
+    JSON.stringify(mapToSortedEntries(direct.standingsById)) === JSON.stringify(mapToSortedEntries(seasonState.standingsById)),
+    'standingsById is byte-identical'
+  );
+  assert(
+    JSON.stringify(mapToSortedEntries(direct.injuryStatusById)) === JSON.stringify(mapToSortedEntries(seasonState.injuryStatusById)),
+    'injuryStatusById is byte-identical'
+  );
+  assert(
+    JSON.stringify(mapToSortedEntries(direct.streakStateById)) === JSON.stringify(mapToSortedEntries(seasonState.streakStateById)),
+    'streakStateById is byte-identical'
+  );
+  assert(
+    JSON.stringify(mapToSortedEntries(direct.seasonBattingStatsById)) === JSON.stringify(mapToSortedEntries(seasonState.seasonBattingStatsById)),
+    'seasonBattingStatsById is byte-identical'
+  );
+  assert(direct.results.length === directSchedule.length, 'sanity: a real season\'s worth of games actually ran (not an empty/truncated batch)');
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

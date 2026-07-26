@@ -178,26 +178,40 @@ console.log('\n=== 6. Real season-1 bootstrap wiring ===\n');
   const withDecay = decayQuotientsForNewSeason(expected);
   assert(sortedEntriesJson(state.quotientByTeamId) !== sortedEntriesJson(withDecay), 'season 1 correctly did NOT apply a decay step (no prior season exists to decay from)');
 
-  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 10, `schemaVersion is the current STATE_SCHEMA_VERSION, 10 (got ${state.schemaVersion})`);
+  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 11, `schemaVersion is the current STATE_SCHEMA_VERSION, 11 (got ${state.schemaVersion})`);
 
   const keys = [...state.quotientByTeamId.keys()].sort();
   const expectedKeys = teams.map((t) => t.id).sort();
   assert(JSON.stringify(keys) === JSON.stringify(expectedKeys), 'quotientByTeamId has exactly the 50 real team ids as keys, no more or fewer');
 }
 
-console.log('\n=== 7. Real multi-season wiring: decay genuinely applied ===\n');
+console.log('\n=== 7. Real multi-season wiring: decay + Cup group-stage fold genuinely applied ===\n');
 {
   const state1 = computeFreshSeason1State();
   const state2 = advanceToNextSeason(state1);
 
-  let expectedWithDecay = decayQuotientsForNewSeason(state1.quotientByTeamId);
-  expectedWithDecay = foldRegularSeasonResults(expectedWithDecay, state2.seasonResult.results);
-  expectedWithDecay = foldPlayoffResult(expectedWithDecay, state2.playoffResult);
-  assert(sortedEntriesJson(state2.quotientByTeamId) === sortedEntriesJson(expectedWithDecay), 'season 2\'s real wiring matches an independently-recomputed decay+fold expectation exactly');
+  // Byte-identical independent reproduction (this section's own approach
+  // before this arc's Phase 3) is no longer possible to compose from
+  // outside advanceToNextSeason: Phase 3's drawCupGroups/simulateSeasonWithCup
+  // now sit BETWEEN the decay step and advanceOffseason's own rng
+  // consumption inside that function, so a freshly-seeded outside
+  // recomputation can't replay the same rng-stream position without
+  // reimplementing advanceToNextSeason's entire internal call order.
+  // Instead: prove each real step is non-trivial by showing state2 would
+  // look DIFFERENT if that step were skipped — same regression-proof
+  // technique this section already used for decay, extended to cover the
+  // newly-added Cup fold too.
+  let noDecayNoCup = foldRegularSeasonResults(state1.quotientByTeamId, state2.seasonResult.results);
+  noDecayNoCup = foldPlayoffResult(noDecayNoCup, state2.playoffResult);
+  assert(sortedEntriesJson(state2.quotientByTeamId) !== sortedEntriesJson(noDecayNoCup), 'skipping BOTH decay and the Cup group-stage fold would have produced a DIFFERENT result');
 
-  let noDecayAlternative = foldRegularSeasonResults(state1.quotientByTeamId, state2.seasonResult.results);
-  noDecayAlternative = foldPlayoffResult(noDecayAlternative, state2.playoffResult);
-  assert(sortedEntriesJson(state2.quotientByTeamId) !== sortedEntriesJson(noDecayAlternative), 'skipping decay would have produced a DIFFERENT result — proving decay is a real, non-no-op step in the wired pipeline');
+  let decayButNoCup = decayQuotientsForNewSeason(state1.quotientByTeamId);
+  decayButNoCup = foldRegularSeasonResults(decayButNoCup, state2.seasonResult.results);
+  decayButNoCup = foldPlayoffResult(decayButNoCup, state2.playoffResult);
+  assert(
+    sortedEntriesJson(state2.quotientByTeamId) !== sortedEntriesJson(decayButNoCup),
+    'skipping JUST the Cup group-stage fold (decay + regular season + playoffs only) still produces a DIFFERENT result — the Cup fold is a real, non-no-op step ("The Ledger Cup" arc, Phase 3)'
+  );
 
   assert([...state2.quotientByTeamId.values()].every((v) => v >= QUOTIENT_FLOOR && v <= QUOTIENT_CEILING), 'every value stays within [20, 100] after a real season transition');
 

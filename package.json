@@ -28,7 +28,8 @@
     "validate:international": "node scripts/validate-international.mjs",
     "validate:freeagency": "node scripts/validate-free-agency.mjs",
     "validate:calendar": "node scripts/validate-calendar.mjs",
-    "validate:quotient": "node scripts/validate-tournament-quotient.mjs"
+    "validate:quotient": "node scripts/validate-tournament-quotient.mjs",
+    "validate:cup": "node scripts/validate-ledger-cup.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

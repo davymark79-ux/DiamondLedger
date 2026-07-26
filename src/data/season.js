@@ -36,7 +36,7 @@
 
 import { teams, freeAgents, getTeamRoster, getTeamManager } from './realLeague.js';
 import { affiliateClubs, initialAffiliateRosterByClubId } from './realAffiliates.js';
-import { simulateOneSeason, advanceOffseason } from '../engine/leagueProgression.js';
+import { advanceOffseason } from '../engine/leagueProgression.js';
 import { simulateMinorLeagueSeasons } from '../engine/minorLeagues.js';
 import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDivisionSwaps } from '../engine/promotionRelegation.js';
 import { simulatePlayoffs } from '../engine/playoffs.js';
@@ -54,8 +54,11 @@ import {
   createInitialQuotientByTeamId,
   decayQuotientsForNewSeason,
   foldRegularSeasonResults,
+  foldResultsArray,
   foldPlayoffResult,
+  K_CONTEXT,
 } from '../engine/tournamentQuotient.js';
+import { drawCupGroups, simulateSeasonWithCup, buildCupGroupStandings, computeCupAdvancement } from '../engine/ledgerCup.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -65,15 +68,15 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v10: "The Ledger
-// Cup" build arc's Phase 2 adds a real quotientByTeamId field, folded
-// after every regular-season and playoff game and decayed once per
-// season) — continues the old v1-v7 localStorage version-bump convention,
-// but now enforced as a real field ON the state object itself and checked
-// on load (see isCompatibleSave below), since IndexedDB only ever has the
-// one 'current' key (data/indexedDbStorage.js) — there's no separate
-// versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 10;
+// Bumped whenever the persisted state's SHAPE changes (v11: "The Ledger
+// Cup" build arc's Phase 3 [Group Stage half] adds a real cupState field —
+// group draw, group-stage standings, and top-24 advancement, once a group
+// stage has actually run) — continues the old v1-v7 localStorage
+// version-bump convention, but now enforced as a real field ON the state
+// object itself and checked on load (see isCompatibleSave below), since
+// IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
+// — there's no separate versioned key to bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 11;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -273,16 +276,24 @@ export function computeFreshSeason1State() {
   const { academyEnrollmentById, academyPlayersById } = seedInitialAcademyPopulation(rng, asOfDate);
   const internationalFreeAgentPoolById = new Map();
 
-  const { seasonResult, weekPlan } = simulateOneSeason(
+  // Season 1 has no Cup activity at all — no Quotient history exists yet
+  // to draw group-stage pots from (cupGroups: null degrades
+  // simulateSeasonWithCup to running exactly the same open-weeks-only path
+  // simulateOneSeason used to, byte-identical at the same seed — see
+  // engine/ledgerCup.js's own header). The first real group stage runs at
+  // season 2 (see advanceToNextSeason).
+  const { seasonResult, weekPlan } = simulateSeasonWithCup(
     teams,
     (id) => rosterByTeamId.get(id),
     (id) => managerByTeamId.get(id),
-    rng
+    rng,
+    null
   );
   // Regular-season fold — a pure post-hoc pass over this season's own
   // already-complete results array (see engine/tournamentQuotient.js's
   // header for why this isn't threaded live through simulateSeason itself).
   quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
+  const cupState = { phase: 'NONE', groups: null, cupGroupStandingsById: null, advancingTeamIds: null };
   const { standingsById: affiliateStandingsById } = simulateMinorLeagueSeasons(affiliateClubs, affiliateRosterByClubId, rng);
   const playoffResult = simulatePlayoffs(
     teams,
@@ -353,6 +364,7 @@ export function computeFreshSeason1State() {
     internationalDraftResult,
     establishedFreeAgentPoolById,
     quotientByTeamId,
+    cupState,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
@@ -416,6 +428,14 @@ export function advanceToNextSeason(state) {
   // regardless of activity.
   let quotientByTeamId = decayQuotientsForNewSeason(state.quotientByTeamId);
 
+  // Ledger Cup group stage (Phase 3, Group Stage half) — every season from
+  // season 2 onward has real Quotient history to seed pots from. Draws
+  // from state.quotientByTeamId (the PRIOR season's own final rating,
+  // before the decay step above) — season 1 itself never reaches here
+  // (computeFreshSeason1State stays cupState: {phase: 'NONE'}), so this
+  // unconditionally runs a real group stage every transition.
+  const cupGroups = drawCupGroups(teamsForNextSeason, state.quotientByTeamId, rng);
+
   const { rosterByTeamId, managerByTeamId } = advanceOffseason(
     teamsForNextSeason,
     state.rosterByTeamId,
@@ -426,13 +446,28 @@ export function advanceToNextSeason(state) {
     state.affiliateRosterByClubId // also mutated in place by the call-up cascade — same ownership contract as roleStateById
   );
 
-  const { seasonResult, weekPlan } = simulateOneSeason(
+  const { seasonResult, weekPlan, cupGroupResults } = simulateSeasonWithCup(
     teamsForNextSeason,
     (id) => rosterByTeamId.get(id),
     (id) => managerByTeamId.get(id),
-    rng
+    rng,
+    cupGroups
   );
   quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
+  // Cup group-stage games fold in too, at their own (higher) K_CONTEXT —
+  // consuming K_CONTEXT.CUP_GROUP_STAGE for the first time anywhere in the
+  // live app (it's existed, inert, since Phase 2). NOT part of
+  // seasonResult.results, so this is a genuinely separate fold, matching
+  // foldPlayoffResult's own precedent below.
+  quotientByTeamId = foldResultsArray(quotientByTeamId, cupGroupResults, K_CONTEXT.CUP_GROUP_STAGE);
+
+  const cupGroupStandingsById = buildCupGroupStandings(cupGroupResults);
+  const { advancingTeamIds } = computeCupAdvancement(cupGroups.groups, cupGroupStandingsById);
+  // Reseeding those 24 into a real knockout bracket, and threading it
+  // through the FOLLOWING season's own H1 blackout weeks, is Phase 3b
+  // (CLAUDE.md's Ledger Cup roadmap) — this phase only carries the
+  // completed group stage's own real standings/advancement forward.
+  const cupState = { phase: 'GROUP_STAGE', groups: cupGroups.groups, cupGroupStandingsById, advancingTeamIds };
 
   // Minor League seasons for the year just entered — run AFTER the call-up
   // cascade above (so this season's affiliate rosters already reflect any
@@ -529,6 +564,7 @@ export function advanceToNextSeason(state) {
     internationalDraftResult,
     establishedFreeAgentPoolById: state.establishedFreeAgentPoolById,
     quotientByTeamId,
+    cupState,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }

@@ -395,30 +395,23 @@ function maybeFireAndRehireManager(
 }
 
 /**
+ * Builds a fresh, empty season-long state object — every Map/array
+ * `simulateGamesIntoState` below reads from and mutates as games get played
+ * into it. Extracted from `simulateSeason`'s own local `const` declarations
+ * ("The Ledger Cup" build arc, Phase 3) so a caller can run games into the
+ * SAME live state across multiple calls instead of only ever getting one
+ * shot at a whole flat schedule — the real prerequisite the Cup's group
+ * stage/knockout rounds need (see `engine/ledgerCup.js`'s header for why a
+ * single call over one schedule array was never going to be enough:
+ * knockout rounds depend on the PREVIOUS round's winners, and both the
+ * group stage and knockout need injuries/fatigue/streaks to keep evolving
+ * continuously alongside the regular season, not reset by a second,
+ * independent simulation pass).
  * @param {object[]} teams - from realLeague.js
- * @param {(teamId: string) => object} getTeamRoster - from realLeague.js
- * @param {object[]} schedule - from buildSeasonSchedule()
- * @param {() => number} rng
- * @param {(teamId: string) => object|null} [getTeamManager] - from realLeague.js's
- *   getTeamManager; defaults to no manager (createSide's own neutral-synthetic-manager
- *   default applies), so existing callers that don't pass this see identical behavior,
- *   including no Firing/Rehiring activity at all (see maybeFireAndRehireManager above).
- * @returns {{
- *   standingsById: Map<string, {wins: number, losses: number}>,
- *   injuryStatusById: Map<string, {type: string, severity: string, gamesRemaining: number, sustainedGameNumber: number}>,
- *   consecutiveGamesPlayedById: Map<string, number>,
- *   streakStateById: Map<string, {baselineCompositeValue: number, recentCompositeValue: number|null, standardDeviationsFromBaseline: number, tier: string}>,
- *   managerAssignmentById: Map<string, object|null> - the CURRENT manager per team, post any in-season firings/rehires,
- *   firings: {gameNumber: number, teamId: string, firedManagerId: string, hiredManagerId: string, winPctAtFiring: number}[],
- *   managerNameById: Map<string, {firstName: string, lastName: string}> - every manager who ever held a real assignment this season, by id (not just the current one per team) — lets a caller resolve names for a historical firing event,
- *   seasonBattingStatsById: Map<string, object> - summed boxScore.js battingLine fields across every game this player batted in,
- *   seasonPitchingStatsById: Map<string, object> - summed pitchingLine fields plus wins/losses/saves across every game this pitcher appeared in,
- *   results: {gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
- *     winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]
- * }}
+ * @param {(teamId: string) => object|null} [getTeamManager] - see simulateSeason's own docs below
+ * @returns {object} a season state — same internal shape simulateSeason used to build inline
  */
-export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager = () => null) {
-  const teamsById = new Map(teams.map((team) => [team.id, team]));
+export function createSeasonState(teams, getTeamManager = () => null) {
   const standingsById = new Map(teams.map((team) => [team.id, { wins: 0, losses: 0 }]));
   const rotationIndexById = new Map(teams.map((team) => [team.id, 0]));
   const injuryStatusById = new Map();
@@ -450,7 +443,72 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
       .map((manager) => [manager.id, { firstName: manager.firstName, lastName: manager.lastName }])
   );
 
-  for (const game of schedule) {
+  return {
+    standingsById, rotationIndexById, injuryStatusById, consecutiveGamesPlayedById,
+    streakAccumulatorById, streakStateById, seasonBattingStatsById, seasonPitchingStatsById, results,
+    managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById,
+  };
+}
+
+/**
+ * Runs one batch of games into an EXISTING season state, mutating it in
+ * place (same "owned across calls by the caller, mutated in place"
+ * convention this codebase already uses for roleStateById/
+ * affiliateRosterByClubId) — this is `simulateSeason`'s old per-game loop
+ * body, extracted so it's callable more than once per season against the
+ * same live player state. Injuries, fatigue, and hot/cold streaks are
+ * NEVER gated by `options` below — they always apply to every game, since
+ * keeping those genuinely continuous across regular-season AND Cup games
+ * is this whole extraction's reason to exist.
+ * @param {object} seasonState - from createSeasonState() (or a prior simulateGamesIntoState call)
+ * @param {object[]} teams - from realLeague.js
+ * @param {(teamId: string) => object} getTeamRoster - from realLeague.js
+ * @param {{gameNumber: number, awayTeamId: string, homeTeamId: string}[]} games - a batch, not necessarily the whole season
+ * @param {() => number} rng
+ * @param {object} [options]
+ * @param {boolean} [options.trackStandings] - default true. Whether these games update
+ *   standingsById AND get appended to seasonState.results (the same "is this part of
+ *   the season's official record" concept — a Cup game is neither: it has its own
+ *   standings, elsewhere, and results consumed by the draft/Quotient's regular-season
+ *   fold must never include it).
+ * @param {boolean} [options.trackManagerLifecycle] - default true. Whether these games
+ *   feed maybeFireAndRehireManager's tenure/win%/owner-patience (managers.md ties
+ *   firing to SEASON win%; a Cup result mixing in would be scope creep beyond spec).
+ * @param {boolean} [options.trackSeasonStats] - default true. Whether these games
+ *   accumulate into seasonBattingStatsById/seasonPitchingStatsById (Hall of Fame
+ *   counting-stat calibration is anchored to real 150-game-season pacing — see
+ *   CLAUDE.md's Calibration notes; Cup performance has its own, separate, still-inert
+ *   zero-weighted Hall of Fame case-score extension point instead).
+ * @param {Map<string, number>} [options.rotationIndexById] - defaults to seasonState's
+ *   own. A caller can pass a separate, local Map instead — matching
+ *   engine/playoffs.js's own established precedent of a local, non-persistent
+ *   rotation counter for tournament games, so a team's regular rotation cycle isn't
+ *   skewed by however many Cup games interrupted it.
+ * @returns {{gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
+ *   winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]}
+ *   this call's own batch of game outcomes — always returned regardless of `options`,
+ *   even when they weren't also appended to seasonState.results, so a Cup caller can
+ *   still fold them into group standings/Quotient without touching the season's
+ *   canonical regular-season log.
+ */
+export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games, rng, options = {}) {
+  const {
+    trackStandings = true,
+    trackManagerLifecycle = true,
+    trackSeasonStats = true,
+    rotationIndexById = seasonState.rotationIndexById,
+  } = options;
+
+  const teamsById = new Map(teams.map((team) => [team.id, team]));
+  const {
+    standingsById, injuryStatusById, consecutiveGamesPlayedById,
+    streakAccumulatorById, streakStateById, seasonBattingStatsById, seasonPitchingStatsById, results,
+    managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById,
+  } = seasonState;
+
+  const batchResults = [];
+
+  for (const game of games) {
     const awayTeam = teamsById.get(game.awayTeamId);
     const homeTeam = teamsById.get(game.homeTeamId);
     const dhRule = LEAGUES[awayTeam.leagueId].dhRule; // same league for both sides, guaranteed by grouping
@@ -503,32 +561,39 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     advanceStreakState(box.away.battingLines, streakAccumulatorById, streakStateById);
     advanceStreakState(box.home.battingLines, streakAccumulatorById, streakStateById);
 
-    accumulateBattingStats(seasonBattingStatsById, box.away.battingLines);
-    accumulateBattingStats(seasonBattingStatsById, box.home.battingLines);
-    accumulatePitchingStats(seasonPitchingStatsById, box.away.pitchingLines, decisions);
-    accumulatePitchingStats(seasonPitchingStatsById, box.home.pitchingLines, decisions);
-
-    const awayStanding = standingsById.get(game.awayTeamId);
-    const homeStanding = standingsById.get(game.homeTeamId);
-    const awayWon = box.away.runs > box.home.runs;
-    if (awayWon) {
-      awayStanding.wins++;
-      homeStanding.losses++;
-    } else {
-      homeStanding.wins++;
-      awayStanding.losses++;
+    if (trackSeasonStats) {
+      accumulateBattingStats(seasonBattingStatsById, box.away.battingLines);
+      accumulateBattingStats(seasonBattingStatsById, box.home.battingLines);
+      accumulatePitchingStats(seasonPitchingStatsById, box.away.pitchingLines, decisions);
+      accumulatePitchingStats(seasonPitchingStatsById, box.home.pitchingLines, decisions);
     }
 
-    maybeFireAndRehireManager(
-      game.awayTeamId, awayTeam, awayWon,
-      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
-    );
-    maybeFireAndRehireManager(
-      game.homeTeamId, homeTeam, !awayWon,
-      managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
-    );
+    const awayWon = box.away.runs > box.home.runs;
 
-    results.push({
+    if (trackStandings) {
+      const awayStanding = standingsById.get(game.awayTeamId);
+      const homeStanding = standingsById.get(game.homeTeamId);
+      if (awayWon) {
+        awayStanding.wins++;
+        homeStanding.losses++;
+      } else {
+        homeStanding.wins++;
+        awayStanding.losses++;
+      }
+    }
+
+    if (trackManagerLifecycle) {
+      maybeFireAndRehireManager(
+        game.awayTeamId, awayTeam, awayWon,
+        managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
+      );
+      maybeFireAndRehireManager(
+        game.homeTeamId, homeTeam, !awayWon,
+        managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById, game.gameNumber, rng
+      );
+    }
+
+    const gameResult = {
       gameNumber: game.gameNumber,
       awayTeamId: game.awayTeamId,
       homeTeamId: game.homeTeamId,
@@ -538,11 +603,50 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
       losingPitcherId: decisions.losingPitcherId,
       savePitcherId: decisions.savePitcherId,
       innings: box.innings,
-    });
+    };
+    batchResults.push(gameResult);
+    if (trackStandings) results.push(gameResult);
   }
 
+  return batchResults;
+}
+
+/**
+ * @param {object[]} teams - from realLeague.js
+ * @param {(teamId: string) => object} getTeamRoster - from realLeague.js
+ * @param {object[]} schedule - from buildSeasonSchedule()
+ * @param {() => number} rng
+ * @param {(teamId: string) => object|null} [getTeamManager] - from realLeague.js's
+ *   getTeamManager; defaults to no manager (createSide's own neutral-synthetic-manager
+ *   default applies), so existing callers that don't pass this see identical behavior,
+ *   including no Firing/Rehiring activity at all (see maybeFireAndRehireManager above).
+ * @returns {{
+ *   standingsById: Map<string, {wins: number, losses: number}>,
+ *   injuryStatusById: Map<string, {type: string, severity: string, gamesRemaining: number, sustainedGameNumber: number}>,
+ *   consecutiveGamesPlayedById: Map<string, number>,
+ *   streakStateById: Map<string, {baselineCompositeValue: number, recentCompositeValue: number|null, standardDeviationsFromBaseline: number, tier: string}>,
+ *   managerAssignmentById: Map<string, object|null> - the CURRENT manager per team, post any in-season firings/rehires,
+ *   firings: {gameNumber: number, teamId: string, firedManagerId: string, hiredManagerId: string, winPctAtFiring: number}[],
+ *   managerNameById: Map<string, {firstName: string, lastName: string}> - every manager who ever held a real assignment this season, by id (not just the current one per team) — lets a caller resolve names for a historical firing event,
+ *   seasonBattingStatsById: Map<string, object> - summed boxScore.js battingLine fields across every game this player batted in,
+ *   seasonPitchingStatsById: Map<string, object> - summed pitchingLine fields plus wins/losses/saves across every game this pitcher appeared in,
+ *   results: {gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
+ *     winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]
+ * }}
+ */
+export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManager = () => null) {
+  const seasonState = createSeasonState(teams, getTeamManager);
+  simulateGamesIntoState(seasonState, teams, getTeamRoster, schedule, rng);
   return {
-    standingsById, injuryStatusById, consecutiveGamesPlayedById, streakStateById,
-    managerAssignmentById, firings, managerNameById, seasonBattingStatsById, seasonPitchingStatsById, results,
+    standingsById: seasonState.standingsById,
+    injuryStatusById: seasonState.injuryStatusById,
+    consecutiveGamesPlayedById: seasonState.consecutiveGamesPlayedById,
+    streakStateById: seasonState.streakStateById,
+    managerAssignmentById: seasonState.managerAssignmentById,
+    firings: seasonState.firings,
+    managerNameById: seasonState.managerNameById,
+    seasonBattingStatsById: seasonState.seasonBattingStatsById,
+    seasonPitchingStatsById: seasonState.seasonPitchingStatsById,
+    results: seasonState.results,
   };
 }
