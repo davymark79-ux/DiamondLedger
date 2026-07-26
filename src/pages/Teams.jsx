@@ -17,7 +17,7 @@ export default function Teams() {
       <PageHeader
         eyebrow="Franchise Directory"
         title="Teams"
-        description="The real 50-team league — click through for each club's full 26-man roster."
+        description="The real 50-team league — click through for each club's full roster: a 26-man active roster plus a real 50-man pool of protected organizational depth."
       />
 
       <div className="flex gap-1 mb-5">

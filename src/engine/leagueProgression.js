@@ -50,12 +50,13 @@ import { buildCalendarSeasonSchedule } from './calendar.js';
 import { advanceDevelopmentPeriodWithReassignment } from './development.js';
 import { rollRetirement, rollManagerRetirement } from './retirement.js';
 import { rollWriterRetirement } from './writerRetirement.js';
-import { promoteAndBackfill } from './minorLeagues.js';
+import { promoteAndBackfill, removeFromRoster } from './minorLeagues.js';
+import { findReserveFit, backfillLevelFromBelow } from './rosterProtection.js';
 import { generateEstablishedPlayer } from '../models/generation/playerGenerator.js';
 import { generateManager } from '../models/generation/managerGenerator.js';
 import { generateWriter } from '../models/generation/writerGenerator.js';
 import { ROSTER_QUALITY_BY_TIER } from '../models/seed/rosterSeed.js';
-import { TIERS } from '../models/constants.js';
+import { TIERS, DEVELOPMENT_LEVELS } from '../models/constants.js';
 
 function qualityRangeForTeam(team) {
   return ROSTER_QUALITY_BY_TIER[team.tier] ?? ROSTER_QUALITY_BY_TIER[TIERS.MLB2];
@@ -98,7 +99,7 @@ export function simulateOneSeason(teams, getTeamRoster, getTeamManager, rng, gam
 // (every validate script, simulateLeagueHistory's own offline Hall-of-Fame
 // pipeline) sees promoteAndBackfill immediately return null and falls
 // straight back to exactly today's behavior — zero change for them.
-function advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId) {
+function advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId, reserveRosterByTeamId) {
   const priorRoleState = roleStateById.get(player.id);
   const { player: grown, roleState } = advanceDevelopmentPeriodWithReassignment(player, priorRoleState, { rng, asOfDate });
   roleStateById.set(player.id, roleState);
@@ -108,22 +109,52 @@ function advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateR
   }
 
   roleStateById.delete(player.id);
-  const calledUp = promoteAndBackfill(team, grown.primaryPosition, affiliateRosterByClubId, rng, asOfDate);
-  const replacement = calledUp ?? generateEstablishedPlayer({
-    rng,
-    position: grown.primaryPosition,
-    qualityRange: qualityRangeForTeam(team),
-    asOfDate,
-    overrides: { id: `${team.id}-r${Math.floor(rng() * 1e9)}`, teamId: team.id },
-  });
+
+  // 50-man Roster System, Phase 1 — check the team's own PROTECTED reserve
+  // pool for a same-position fit first, before the wider AAA call-up
+  // cascade or thin-air generation: a protected player is the one a real
+  // club could call up immediately without any further procedure (see
+  // engine/rosterProtection.js's findReserveFit). `reserveRosterByTeamId`
+  // defaults to an empty Map for every caller that doesn't pass one (every
+  // validate script, simulateLeagueHistory's own offline Hall-of-Fame
+  // pipeline), so findReserveFit immediately returns null and behavior
+  // falls straight back to today's exact promoteAndBackfill/thin-air path
+  // — zero change for them.
+  const reserveIds = reserveRosterByTeamId?.get(team.id) ?? [];
+  const reserveFit = findReserveFit(team.id, grown.primaryPosition, reserveIds, affiliateRosterByClubId);
+
+  let replacement;
+  if (reserveFit) {
+    affiliateRosterByClubId.set(
+      reserveFit.clubId,
+      removeFromRoster(affiliateRosterByClubId.get(reserveFit.clubId), reserveFit.sectionKey, reserveFit.player.id)
+    );
+    // A real bug caught during this phase's own regression testing: unlike
+    // promoteAndBackfill's own MLB call-ups, a reserve promotion was
+    // leaving the vacated AAA/AA slot empty with no replenishment —
+    // AAA/AA rosters shrank unrecoverably over several seasons until a
+    // section ran out of players entirely. Backfill it the same way
+    // promoteAndBackfill would (cascading from the level below).
+    backfillLevelFromBelow(team, reserveFit.level, grown.primaryPosition, affiliateRosterByClubId, rng, asOfDate);
+    replacement = { ...reserveFit.player, developmentLevel: DEVELOPMENT_LEVELS.MLB, teamId: team.id };
+  } else {
+    const calledUp = promoteAndBackfill(team, grown.primaryPosition, affiliateRosterByClubId, rng, asOfDate);
+    replacement = calledUp ?? generateEstablishedPlayer({
+      rng,
+      position: grown.primaryPosition,
+      qualityRange: qualityRangeForTeam(team),
+      asOfDate,
+      overrides: { id: `${team.id}-r${Math.floor(rng() * 1e9)}`, teamId: team.id },
+    });
+  }
   return { player: replacement, retiredPlayerId: grown.id };
 }
 
-function advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId) {
+function advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId, reserveRosterByTeamId) {
   const retiredPlayerIds = [];
   function advanceGroup(players) {
     return players.map((player) => {
-      const result = advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId);
+      const result = advanceOnePlayer(player, team, roleStateById, rng, asOfDate, affiliateRosterByClubId, reserveRosterByTeamId);
       if (result.retiredPlayerId) retiredPlayerIds.push(result.retiredPlayerId);
       return result.player;
     });
@@ -164,9 +195,10 @@ function advanceManagerForTeam(manager, team, rng, asOfDate) {
  * @param {Date} asOfDate
  * @param {() => number} rng
  * @param {Map<string, object>} [affiliateRosterByClubId] - Minor League System (engine/minorLeagues.js) sectioned rosters by affiliate club id, mutated in place by the call-up cascade and carried forward by the caller across seasons — same ownership contract as roleStateById. Defaults to an empty Map (every retiree replacement falls back to thin-air generation, today's exact behavior) for callers that don't have a Minor League System wired up.
+ * @param {Map<string, string[]>} [reserveRosterByTeamId] - 50-man Roster System (engine/rosterProtection.js) protected-player ids by team, read-only here (revalidation/top-up happens at the caller's own season boundary, after this call). Defaults to an empty Map for callers that don't have reserve protection wired up — zero change for them.
  * @returns {{rosterByTeamId: Map, managerByTeamId: Map, retiredPlayerIds: string[], retiredManagerIds: string[]}}
  */
-export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleStateById, asOfDate, rng, affiliateRosterByClubId = new Map()) {
+export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleStateById, asOfDate, rng, affiliateRosterByClubId = new Map(), reserveRosterByTeamId = new Map()) {
   const newRosterByTeamId = new Map();
   const newManagerByTeamId = new Map();
   const retiredPlayerIds = [];
@@ -174,7 +206,7 @@ export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleSta
 
   for (const team of teams) {
     const roster = rosterByTeamId.get(team.id);
-    const { roster: advancedRoster, retiredPlayerIds: teamRetirees } = advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId);
+    const { roster: advancedRoster, retiredPlayerIds: teamRetirees } = advanceRosterForTeam(roster, team, roleStateById, rng, asOfDate, affiliateRosterByClubId, reserveRosterByTeamId);
     newRosterByTeamId.set(team.id, advancedRoster);
     retiredPlayerIds.push(...teamRetirees);
 

@@ -205,6 +205,28 @@ export function LeagueStateProvider({ children }) {
     return state.affiliateStandingsById.get(clubId) ?? { wins: 0, losses: 0 };
   }
 
+  // 50-man Roster System, Phase 1 (engine/rosterProtection.js) — resolves
+  // teamId's protected reserve ids against its CURRENT AAA/AA affiliate
+  // rosters (not a cached snapshot), so a player who's since been called
+  // up/traded/retired simply drops out of the resolved list for this
+  // render, matching the existing "resolve from live source of truth"
+  // pattern getAffiliateRoster/getAffiliateStandings already use. Returns
+  // each player plus which level (AAA or AA) he's currently actually
+  // playing at — protection doesn't pull him out of that team's real
+  // season, it's purely a designation layered on top.
+  function getReserveRoster(teamId) {
+    const protectedIds = new Set(state.reserveRosterByTeamId.get(teamId) ?? []);
+    if (protectedIds.size === 0) return [];
+    const results = [];
+    for (const level of ['AAA', 'AA']) {
+      const roster = getAffiliateRoster(`${teamId}-${level}`);
+      for (const player of [...roster.lineup, ...roster.rotation, ...roster.bullpen, ...roster.bench]) {
+        if (protectedIds.has(player.id)) results.push({ player, level });
+      }
+    }
+    return results;
+  }
+
   // Domestic Draft (engine/draft.js) — this season's real draft, already
   // fully self-contained (selections carry player display fields directly,
   // see data/season.js's runDraftAndCollegePathway) so no extra lookup is
@@ -440,6 +462,7 @@ export function LeagueStateProvider({ children }) {
     getAffiliateClub,
     getAffiliateRoster,
     getAffiliateStandings,
+    getReserveRoster,
     getDraftResult,
     getCollegeSummary,
     getTeamCollegeRightsCount,

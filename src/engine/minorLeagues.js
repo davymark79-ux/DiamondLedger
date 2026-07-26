@@ -119,18 +119,25 @@ export function sectionKeyForPosition(position) {
   return 'lineup';
 }
 
-function findBestFit(roster, position) {
+// Exported — engine/rosterProtection.js's backfillLevelFromBelow (the
+// "50-man Roster System" arc's Phase 1) reuses this directly, same reason
+// removeFromRoster/addToRoster/generateForLevel are exported below.
+export function findBestFit(roster, position) {
   const sectionKey = sectionKeyForPosition(position);
   const candidates = sectionKey === 'lineup' ? roster.lineup.filter((p) => p.primaryPosition === position) : roster[sectionKey];
   if (!candidates || candidates.length === 0) return null;
   return candidates.reduce((best, p) => (playerQualityScore(p) > playerQualityScore(best) ? p : best));
 }
 
-function removeFromRoster(roster, sectionKey, playerId) {
+// Exported — engine/rosterProtection.js (the "50-man Roster System" arc's
+// Phase 1) reuses these two directly when promoting a protected reserve
+// player, rather than redefining the same section-array update a second
+// time.
+export function removeFromRoster(roster, sectionKey, playerId) {
   return { ...roster, [sectionKey]: roster[sectionKey].filter((p) => p.id !== playerId) };
 }
 
-function addToRoster(roster, sectionKey, player) {
+export function addToRoster(roster, sectionKey, player) {
   return { ...roster, [sectionKey]: [...roster[sectionKey], player] };
 }
 
@@ -139,7 +146,8 @@ function addToRoster(roster, sectionKey, player) {
 // generated in that level's own quality band, same graceful-degradation
 // convention used everywhere else in this engine a substitution pool runs
 // dry (e.g. resolveAvailableRoster's "nobody left to promote" fallback).
-function generateForLevel(level, position, team, rng, asOfDate) {
+// Exported for the same reason as findBestFit above.
+export function generateForLevel(level, position, team, rng, asOfDate) {
   return generateEstablishedPlayer({
     rng,
     position,

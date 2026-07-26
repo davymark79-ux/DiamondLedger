@@ -59,6 +59,7 @@ import {
   K_CONTEXT,
 } from '../engine/tournamentQuotient.js';
 import { drawCupGroups, simulateSeasonWithCup, buildCupGroupStandings, computeCupAdvancement, reseedForKnockout, buildKnockoutBracket } from '../engine/ledgerCup.js';
+import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '../engine/rosterProtection.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -68,17 +69,16 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v12: "The Ledger
-// Cup" build arc's Phase 3b adds cupState.knockout — the reseeded 24-team
-// bracket, played out across the FOLLOWING season's H1 blackout weeks plus
-// the Final at the All-Star week, once a prior season's group stage has
-// produced a real 24-team advancement to reseed from) — continues the old
-// v1-v7 localStorage version-bump convention, but now enforced as a real
-// field ON the state object itself and checked on load (see
-// isCompatibleSave below), since IndexedDB only ever has the one 'current'
-// key (data/indexedDbStorage.js) — there's no separate versioned key to
-// bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 12;
+// Bumped whenever the persisted state's SHAPE changes (v13: "The 50-man
+// Roster System" arc's Phase 1 adds reserveRosterByTeamId — up to 24
+// AAA/AA affiliate players per team, protection-designated onto the
+// 50-man pool, not a new population; see engine/rosterProtection.js)
+// — continues the old v1-v7 localStorage version-bump convention, but now
+// enforced as a real field ON the state object itself and checked on load
+// (see isCompatibleSave below), since IndexedDB only ever has the one
+// 'current' key (data/indexedDbStorage.js) — there's no separate versioned
+// key to bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 13;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -255,6 +255,13 @@ export function computeFreshSeason1State() {
   const asOfDate = new Date();
   const rng = seasonRngForNumber(1);
 
+  // 50-man Roster System, Phase 1 — up to 24 of each team's own AAA/AA
+  // affiliate players protection-designated onto the 50-man pool. A pure
+  // quality sort, no rng consumed (see engine/rosterProtection.js's own
+  // header for why this is a designation over EXISTING players, not new
+  // generation).
+  const reserveRosterByTeamId = new Map(teams.map((t) => [t.id, computeInitialReserveRoster(t.id, affiliateRosterByClubId)]));
+
   // Tournament Quotient (Ledger Cup arc, Phase 2) — the 50 real teams are
   // established clubs being newly rated for the first time, not fictional
   // expansion clubs, so they start at CENTER (60.00), not the floor
@@ -372,6 +379,7 @@ export function computeFreshSeason1State() {
     establishedFreeAgentPoolById,
     quotientByTeamId,
     cupState,
+    reserveRosterByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
@@ -462,7 +470,8 @@ export function advanceToNextSeason(state) {
     state.roleStateById, // mutated in place by advanceOffseason — the same Map instance is carried forward, per its own "owned across seasons by the caller" contract
     asOfDate,
     rng,
-    state.affiliateRosterByClubId // also mutated in place by the call-up cascade — same ownership contract as roleStateById
+    state.affiliateRosterByClubId, // also mutated in place by the call-up cascade — same ownership contract as roleStateById
+    state.reserveRosterByTeamId // read-only here (a protected reserve fit, if consumed, is reflected via affiliateRosterByClubId's own mutation above) — revalidation/top-up happens below, after this season's own affiliate composition is fully settled
   );
 
   const { seasonResult, weekPlan, cupGroupResults, cupKnockoutResult } = simulateSeasonWithCup(
@@ -584,6 +593,20 @@ export function advanceToNextSeason(state) {
   // this arc touches.
   advanceEstablishedFreeAgentPool(state.establishedFreeAgentPoolById, rng, asOfDate);
 
+  // 50-man Roster System, Phase 1 — revalidate + top up AFTER this
+  // season's full affiliate-composition churn (retiree-replacement's
+  // reserve consumption above, the draft/college/international pathways)
+  // has fully settled, using state.affiliateRosterByClubId's own final,
+  // mutated-in-place state for this season. Drops any protected id no
+  // longer present in the team's current AAA/AA rosters and tops up from
+  // the next-best currently-unprotected player. No rng consumed.
+  const reserveRosterByTeamId = new Map(
+    teamsForNextSeason.map((t) => [
+      t.id,
+      revalidateAndTopUpReserveRoster(t.id, state.reserveRosterByTeamId.get(t.id) ?? [], state.affiliateRosterByClubId),
+    ])
+  );
+
   return {
     seasonNumber,
     asOfDate,
@@ -609,6 +632,7 @@ export function advanceToNextSeason(state) {
     establishedFreeAgentPoolById: state.establishedFreeAgentPoolById,
     quotientByTeamId,
     cupState,
+    reserveRosterByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }

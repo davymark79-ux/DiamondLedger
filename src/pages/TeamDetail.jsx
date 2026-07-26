@@ -349,6 +349,36 @@ function FarmSystemCard({ teamId }) {
   );
 }
 
+// 50-man Roster System (engine/rosterProtection.js), Phase 1 — up to 24 of
+// the team's own AAA/AA affiliate players, protection-designated onto the
+// 50-man pool. Not a separate roster: these players keep playing their
+// real affiliate's games exactly as any other AAA/AA player (see
+// getReserveRoster's own header) — this card is a read-only view of who's
+// currently protected and which level he's actually at, same visual
+// convention as FarmSystemCard. No manual protect/release action exists
+// yet (a later phase's job, once real roster-transaction UI exists).
+function ReserveRosterCard({ teamId }) {
+  const { getReserveRoster } = useLeagueState();
+  const entries = getReserveRoster(teamId);
+
+  return (
+    <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
+      <div className="px-4 py-2 text-[11px] uppercase tracking-wider text-brass-bright/80 border-b border-field-line flex items-center justify-between">
+        <span>Reserve / 50-Man Pool</span>
+        <span className="text-[10px] text-ledger/40 normal-case tracking-normal">{entries.length} protected</span>
+      </div>
+      {entries.length === 0 && <div className="px-4 py-3 text-xs text-ledger/40">No players currently protected.</div>}
+      {entries.map(({ player, level }) => (
+        <div key={player.id} className="grid grid-cols-[minmax(9rem,1fr)_3rem_2.5rem] px-4 py-1 text-sm border-b border-field-line last:border-b-0">
+          <span className="text-ledger/85 truncate">{player.firstName} {player.lastName}</span>
+          <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
+          <span className="text-right agate text-[11px] text-ledger/40">{level}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function TeamDetail() {
   const { id } = useParams();
   const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
@@ -375,7 +405,7 @@ export default function TeamDetail() {
       <PageHeader
         eyebrow={<TierBadge tier={team.tier} />}
         title={`${team.city} ${team.nickname}`}
-        description="Full 26-man active roster: lineup, rotation, bullpen (core + depth), and bench are all real generated players."
+        description="26-man active roster (lineup, rotation, bullpen, bench) shown below, plus a real 50-man pool: up to 24 more players from this org's own AAA/AA affiliates are protection-designated onto the roster while still playing for their real affiliate club."
       />
 
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -394,6 +424,7 @@ export default function TeamDetail() {
       <div className="grid grid-cols-1 gap-4">
         <ManagerCard manager={manager} changes={managerChanges} />
         <FarmSystemCard teamId={team.id} />
+        <ReserveRosterCard teamId={team.id} />
         <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} />
         <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} />
         <SeasonResultsTable teamId={team.id} teamsById={teamsById} />

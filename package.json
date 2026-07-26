@@ -29,7 +29,8 @@
     "validate:freeagency": "node scripts/validate-free-agency.mjs",
     "validate:calendar": "node scripts/validate-calendar.mjs",
     "validate:quotient": "node scripts/validate-tournament-quotient.mjs",
-    "validate:cup": "node scripts/validate-ledger-cup.mjs"
+    "validate:cup": "node scripts/validate-ledger-cup.mjs",
+    "validate:reserve": "node scripts/validate-roster-protection.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",
