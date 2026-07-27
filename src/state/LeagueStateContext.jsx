@@ -24,6 +24,7 @@ import {
   signAmateurFreeAgent as signAmateurFreeAgentEngine,
   signEstablishedFreeAgent as signEstablishedFreeAgentEngine,
 } from '../engine/freeAgency.js';
+import { computeTeamPayroll, computeLuxuryTaxOwed, SALARY_FLOOR, LUXURY_TAX_THRESHOLD } from '../engine/contracts.js';
 
 const LeagueStateContext = createContext(null);
 
@@ -246,6 +247,21 @@ export function LeagueStateProvider({ children }) {
     return results;
   }
 
+  // "50-man Roster System" arc, Phase 3 (engine/contracts.js) — real
+  // per-team payroll, summed across the active 26 and the Reserve pool
+  // specifically (the same 50-man basis real MLB's own luxury-tax
+  // calculation uses), plus the flat floor/threshold every team is
+  // measured against. A live aggregation, not stored state.
+  function getTeamPayroll(teamId) {
+    const payroll = computeTeamPayroll(teamId, state.rosterByTeamId, state.reserveRosterByTeamId, state.affiliateRosterByClubId);
+    return {
+      payroll,
+      taxOwed: computeLuxuryTaxOwed(payroll),
+      belowFloor: payroll < SALARY_FLOOR,
+      overThreshold: payroll > LUXURY_TAX_THRESHOLD,
+    };
+  }
+
   // Domestic Draft (engine/draft.js) — this season's real draft, already
   // fully self-contained (selections carry player display fields directly,
   // see data/season.js's runDraftAndCollegePathway) so no extra lookup is
@@ -350,7 +366,7 @@ export function LeagueStateProvider({ children }) {
   async function signEstablishedFreeAgent(playerId, teamId) {
     if (isSimulating) return null;
     const roster = state.rosterByTeamId.get(teamId);
-    const result = signEstablishedFreeAgentEngine(playerId, teamId, state.establishedFreeAgentPoolById, roster);
+    const result = signEstablishedFreeAgentEngine(playerId, teamId, state.establishedFreeAgentPoolById, roster, state.asOfDate);
     if (!result) return null;
     const rosterByTeamId = new Map(state.rosterByTeamId);
     rosterByTeamId.set(teamId, result.updatedRoster);
@@ -483,6 +499,7 @@ export function LeagueStateProvider({ children }) {
     getAffiliateStandings,
     getReserveRoster,
     getTaxiSquad,
+    getTeamPayroll,
     getDraftResult,
     getCollegeSummary,
     getTeamCollegeRightsCount,

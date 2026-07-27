@@ -62,6 +62,7 @@ import { drawCupGroups, simulateSeasonWithCup, buildCupGroupStandings, computeCu
 import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '../engine/rosterProtection.js';
 import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayers, incrementOptionYearsUsed } from '../engine/taxiSquad.js';
 import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
+import { assignMissingContracts } from '../engine/contracts.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -71,16 +72,16 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v14: "The 50-man
-// Roster System" arc's Phase 2 adds taxiRosterByTeamId — up to 5 players
-// per team, a subset of the Reserve pool, real-genuinely used in game
-// simulation as rest/injury relief; see engine/taxiSquad.js) — continues
+// Bumped whenever the persisted state's SHAPE changes (v15: "The 50-man
+// Roster System" arc's Phase 3 adds a real `contract` field to every
+// org-affiliated player — active roster, Reserve pool, and every other
+// AAA/AA/A/Rookie affiliate player; see engine/contracts.js) — continues
 // the old v1-v7 localStorage version-bump convention, but now enforced as
 // a real field ON the state object itself and checked on load (see
 // isCompatibleSave below), since IndexedDB only ever has the one 'current'
 // key (data/indexedDbStorage.js) — there's no separate versioned key to
 // bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 14;
+export const STATE_SCHEMA_VERSION = 15;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -412,6 +413,14 @@ export function computeFreshSeason1State() {
   const establishedFreeAgentPoolById = new Map(freeAgents.map((p) => [p.id, p]));
   advanceEstablishedFreeAgentPool(establishedFreeAgentPoolById, rng, asOfDate);
 
+  // 50-man Roster System, Phase 3 — run LAST, after every draft/college/
+  // international signing this season has already produced every new
+  // player who needs one (see engine/contracts.js's own header for why a
+  // single sweep here is enough: it never overwrites an existing
+  // contract, so anyone already assigned earlier this function — none yet,
+  // season 1 starts from scratch — is left untouched).
+  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, asOfDate);
+
   return {
     seasonNumber: 1,
     asOfDate,
@@ -697,6 +706,13 @@ export function advanceToNextSeason(state) {
     ])
   );
   for (const t of teamsForNextSeason) incrementOptionYearsUsed(t.id, taxiRosterByTeamId.get(t.id), state.affiliateRosterByClubId);
+
+  // 50-man Roster System, Phase 3 — run LAST, after every draft/college/
+  // international signing and minor-league backfill this season has
+  // already produced every new player who needs one. Never overwrites an
+  // existing contract (see engine/contracts.js's own header) — every
+  // player who already had one before this transition keeps it unchanged.
+  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, state.affiliateRosterByClubId, asOfDate);
 
   return {
     seasonNumber,

@@ -127,6 +127,14 @@ export function createPlayer(overrides = {}) {
     // 5-assignment thresholds) is Phase 5's job; this is honest bookkeeping
     // only, so that phase doesn't have to start counting from zero.
     optionYearsUsed: overrides.optionYearsUsed ?? 0,
+
+    // financial-model-expenses.md's "Player Payroll" section — see
+    // engine/contracts.js. null for anyone outside an organization's
+    // system (college/international amateurs get NIL, not salary; unsigned
+    // free agents have no current deal) — a real Contract (models/Contract.js)
+    // for everyone else, starting with the "50-man Roster System" arc's
+    // Phase 3.
+    contract: overrides.contract ?? null,
   };
 }
 

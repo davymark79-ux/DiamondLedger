@@ -68,6 +68,7 @@
 
 import { sectionKeyForPosition, playerQualityScore } from './minorLeagues.js';
 import { rollRetirement } from './retirement.js';
+import { generateContractForPlayer } from './contracts.js';
 import { MINOR_LEAGUE_LEVELS_ORDER, MINOR_LEAGUE_QUALITY_BANDS, DEVELOPMENT_LEVELS } from '../models/constants.js';
 
 // ===== Amateur free agency (College + International, shared) =====
@@ -98,7 +99,16 @@ function assignSignedAmateurToAffiliate(player, teamId, level, affiliateRosterBy
   const roster = affiliateRosterByClubId.get(clubId);
   if (!roster) return false; // no affiliate system wired up for this caller
   const sectionKey = sectionKeyForPosition(player.primaryPosition);
-  const signedPlayer = { ...player, developmentLevel: DEVELOPMENT_LEVELS[level], teamId };
+  // "50-man Roster System" arc, Phase 3 — he had no contract in the
+  // free-agent pool (amateurs get NIL, not salary, until signed). He isn't
+  // on any team's Reserve pool yet either (that's a separate, season-
+  // boundary computation, see engine/rosterProtection.js) regardless of
+  // how strong `level` turned out, so MINORS_DEPTH is the objectively
+  // correct context here, not a guess — matches exactly how
+  // engine/contracts.js's own assignMissingContracts would classify him if
+  // it encountered him at the next season boundary instead.
+  const contract = player.contract ?? generateContractForPlayer(player, 'MINORS_DEPTH', level, null);
+  const signedPlayer = { ...player, developmentLevel: DEVELOPMENT_LEVELS[level], teamId, contract };
   affiliateRosterByClubId.set(clubId, { ...roster, [sectionKey]: [...roster[sectionKey], signedPlayer] });
   return true;
 }
@@ -157,10 +167,11 @@ function candidatesForSigning(roster, sectionKey, position) {
  * @param {string} teamId
  * @param {Map<string, object>} establishedFreeAgentPoolById
  * @param {{lineup:object[], rotation:object[], bullpen:object[], bench:object[]}|undefined} roster - teamId's CURRENT roster object
+ * @param {Date} [asOfDate] - in-game date (state.asOfDate), NOT wall-clock time — used for the signed player's age-based contract salary (engine/contracts.js)
  * @returns {{updatedRoster: object, releasedPlayerId: string, sectionKey: string}|null}
  *   null if playerId isn't in the pool, or no roster was passed — caller no-ops
  */
-export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentPoolById, roster) {
+export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentPoolById, roster, asOfDate = new Date()) {
   const player = establishedFreeAgentPoolById.get(playerId);
   if (!player || !roster) return null;
 
@@ -168,7 +179,13 @@ export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentP
   const candidates = candidatesForSigning(roster, sectionKey, player.primaryPosition);
   const releasedPlayer = candidates.reduce((worst, p) => (playerQualityScore(p) < playerQualityScore(worst) ? p : worst));
 
-  const signedPlayer = { ...player, teamId };
+  // "50-man Roster System" arc, Phase 3 — free agency is a real
+  // renegotiation event, unlike every other case engine/contracts.js
+  // treats as sticky-once-assigned: this ALWAYS generates a fresh contract,
+  // even if the player already carried a (now-stale) one from before he
+  // hit the pool.
+  const contract = generateContractForPlayer(player, 'ACTIVE', null, asOfDate);
+  const signedPlayer = { ...player, teamId, contract };
   const updatedRoster = {
     ...roster,
     [sectionKey]: [...roster[sectionKey].filter((p) => p.id !== releasedPlayer.id), signedPlayer],

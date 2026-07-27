@@ -31,7 +31,8 @@
     "validate:quotient": "node scripts/validate-tournament-quotient.mjs",
     "validate:cup": "node scripts/validate-ledger-cup.mjs",
     "validate:reserve": "node scripts/validate-roster-protection.mjs",
-    "validate:taxi": "node scripts/validate-taxi-expansion.mjs"
+    "validate:taxi": "node scripts/validate-taxi-expansion.mjs",
+    "validate:contracts": "node scripts/validate-contracts.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

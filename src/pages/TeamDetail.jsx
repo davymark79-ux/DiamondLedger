@@ -410,7 +410,7 @@ function TaxiSquadCard({ teamId }) {
 
 export default function TeamDetail() {
   const { id } = useParams();
-  const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
+  const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges, getTeamPayroll } = useLeagueState();
   const team = teams.find((t) => t.id === id);
 
   if (!team) {
@@ -427,6 +427,7 @@ export default function TeamDetail() {
   const manager = getCurrentTeamManager(team.id);
   const managerChanges = getTeamManagerChanges(team.id);
   const teamsById = new Map(teams.map((t) => [t.id, t]));
+  const { payroll } = getTeamPayroll(team.id);
 
   return (
     <div>
@@ -437,11 +438,13 @@ export default function TeamDetail() {
         description="26-man active roster (lineup, rotation, bullpen, bench) shown below, plus a real 50-man pool: up to 24 more players from this org's own AAA/AA affiliates are protection-designated onto the roster while still playing for their real affiliate club."
       />
 
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-4 gap-4 mb-6">
         {[
           ['Record', `${record.wins}-${record.losses}`],
           ['Market Size', `${Math.round(team.marketSize * 100)}/100`],
           ['Ownership', ownershipDisplay(team.ownership)],
+          // "50-man Roster System" arc, Phase 3 — active 26 + Reserve pool, same basis as Financials.jsx's own Payroll column.
+          ['Payroll (50-man)', `$${(payroll / 1_000_000).toFixed(1)}M`],
         ].map(([label, value]) => (
           <div key={label} className="bg-field-dark border border-field-line rounded-sm px-4 py-3">
             <div className="text-[10px] tracking-wider uppercase text-ledger/40 mb-1">{label}</div>
