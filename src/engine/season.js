@@ -15,7 +15,7 @@ import { simulateGame } from './game.js';
 import { computePitcherDecisions } from './pitcherDecisions.js';
 import { maybeEscalateInjury } from './injuries.js';
 import { updateStreakState } from './hotColdStreaks.js';
-import { rollRest } from './positionPlayerFatigue.js';
+import { rollRest, applyShuttleFatigue } from './positionPlayerFatigue.js';
 import { computeWinPct, updateOwnerPatience, rollFiring, HONEYMOON_PATIENCE, OWNER_PATIENCE_NEUTRAL } from './managerFiring.js';
 import { createManager } from '../models/Manager.js';
 import { generateManager } from '../models/generation/managerGenerator.js';
@@ -153,7 +153,15 @@ function isAvailable(player, injuryStatusById) {
 // entire rotation/bullpen out at once), that player plays anyway — the
 // same graceful-degradation fallback game.js already accepts everywhere
 // else a substitution pool runs dry, not a new special case.
-export function resolveAvailableRoster(roster, injuryStatusById) {
+//
+// `taxiIdSet`/`rng` ("50-man Roster System" arc, Phase 2): when the roster's
+// `bench` has been pre-augmented with a team's live Taxi Squad players (see
+// data/season.js's getTeamRosterWithTaxi), a replacement whose id is in
+// `taxiIdSet` takes a one-game shuttle-fatigue hit (positionPlayerFatigue.js's
+// applyShuttleFatigue) — he's actually being used, not just sitting in
+// reserve. Both default to null/no-op, so every existing caller (including
+// playoffs.js, which never passes these) is unaffected.
+export function resolveAvailableRoster(roster, injuryStatusById, taxiIdSet = null, rng = null) {
   const availableBench = roster.bench.filter((player) => isAvailable(player, injuryStatusById));
   const usedBenchIds = new Set();
 
@@ -162,6 +170,7 @@ export function resolveAvailableRoster(roster, injuryStatusById) {
     const replacement = availableBench.find((candidate) => !usedBenchIds.has(candidate.id));
     if (!replacement) return player; // nobody left to promote — plays through it
     usedBenchIds.add(replacement.id);
+    if (taxiIdSet?.has(replacement.id)) return applyShuttleFatigue(replacement, rng);
     return replacement;
   }
 
@@ -189,7 +198,13 @@ export function resolveAvailableRoster(roster, injuryStatusById) {
 // today either, so this doesn't introduce a new inconsistency. Pitchers
 // aren't touched (rotation/bullpen pass through unchanged) — this mechanic
 // is position-player-only, per positionPlayerFatigue.js's own header.
-export function resolveRestedRoster(roster, consecutiveGamesPlayedById, managerProfile = createManager(), rng) {
+//
+// `taxiIdSet` ("50-man Roster System" arc, Phase 2): same shuttle-fatigue
+// treatment as resolveAvailableRoster above, applied here too since rest
+// relief (not just injury replacement) is Taxi Squad's actual primary use
+// case. Defaults to null, so playoffs.js's own direct calls (which never
+// pass it) are unaffected.
+export function resolveRestedRoster(roster, consecutiveGamesPlayedById, managerProfile = createManager(), rng, taxiIdSet = null) {
   const usedBenchIds = new Set();
 
   function restIfFatigued(player) {
@@ -198,6 +213,7 @@ export function resolveRestedRoster(roster, consecutiveGamesPlayedById, managerP
     const replacement = roster.bench.find((candidate) => !usedBenchIds.has(candidate.id));
     if (!replacement) return player; // nobody left on the bench — plays through it, same fallback as injuries
     usedBenchIds.add(replacement.id);
+    if (taxiIdSet?.has(replacement.id)) return applyShuttleFatigue(replacement, rng);
     return replacement;
   }
 
@@ -484,6 +500,12 @@ export function createSeasonState(teams, getTeamManager = () => null) {
  *   engine/playoffs.js's own established precedent of a local, non-persistent
  *   rotation counter for tournament games, so a team's regular rotation cycle isn't
  *   skewed by however many Cup games interrupted it.
+ * @param {Map<string, Set<string>>} [options.taxiIdsByTeamId] - "50-man Roster
+ *   System" arc, Phase 2. teamId -> that team's current Taxi Squad player ids,
+ *   passed through to resolveAvailableRoster/resolveRestedRoster so a taxi
+ *   player actually used this game takes the shuttle-fatigue hit. Defaults to
+ *   an empty Map (no-op) — every caller that doesn't pass this sees identical
+ *   behavior to before this option existed.
  * @returns {{gameNumber: number, awayTeamId: string, homeTeamId: string, awayRuns: number, homeRuns: number,
  *   winningPitcherId: string|null, losingPitcherId: string|null, savePitcherId: string|null, innings: number}[]}
  *   this call's own batch of game outcomes — always returned regardless of `options`,
@@ -497,6 +519,7 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
     trackManagerLifecycle = true,
     trackSeasonStats = true,
     rotationIndexById = seasonState.rotationIndexById,
+    taxiIdsByTeamId = new Map(),
   } = options;
 
   const teamsById = new Map(teams.map((team) => [team.id, team]));
@@ -538,10 +561,12 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
     // Injuries first (mandatory), then auto-rest (a voluntary managerial
     // choice layered on top of the already-injury-resolved lineup) — see
     // resolveRestedRoster's own header.
-    const awayInjuryResolved = resolveAvailableRoster(awayFullRoster, injuryStatusById);
-    const homeInjuryResolved = resolveAvailableRoster(homeFullRoster, injuryStatusById);
-    const awayRoster = resolveRestedRoster(awayInjuryResolved, consecutiveGamesPlayedById, awayManager, rng);
-    const homeRoster = resolveRestedRoster(homeInjuryResolved, consecutiveGamesPlayedById, homeManager, rng);
+    const awayTaxiIds = taxiIdsByTeamId.get(game.awayTeamId) ?? null;
+    const homeTaxiIds = taxiIdsByTeamId.get(game.homeTeamId) ?? null;
+    const awayInjuryResolved = resolveAvailableRoster(awayFullRoster, injuryStatusById, awayTaxiIds, rng);
+    const homeInjuryResolved = resolveAvailableRoster(homeFullRoster, injuryStatusById, homeTaxiIds, rng);
+    const awayRoster = resolveRestedRoster(awayInjuryResolved, consecutiveGamesPlayedById, awayManager, rng, awayTaxiIds);
+    const homeRoster = resolveRestedRoster(homeInjuryResolved, consecutiveGamesPlayedById, homeManager, rng, homeTaxiIds);
     const awayStarter = awayRoster.rotation[rotationIndexById.get(game.awayTeamId) % awayRoster.rotation.length];
     const homeStarter = homeRoster.rotation[rotationIndexById.get(game.homeTeamId) % homeRoster.rotation.length];
     rotationIndexById.set(game.awayTeamId, rotationIndexById.get(game.awayTeamId) + 1);

@@ -60,6 +60,8 @@ import {
 } from '../engine/tournamentQuotient.js';
 import { drawCupGroups, simulateSeasonWithCup, buildCupGroupStandings, computeCupAdvancement, reseedForKnockout, buildKnockoutBracket } from '../engine/ledgerCup.js';
 import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '../engine/rosterProtection.js';
+import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayers, incrementOptionYearsUsed } from '../engine/taxiSquad.js';
+import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -69,16 +71,16 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v13: "The 50-man
-// Roster System" arc's Phase 1 adds reserveRosterByTeamId — up to 24
-// AAA/AA affiliate players per team, protection-designated onto the
-// 50-man pool, not a new population; see engine/rosterProtection.js)
-// — continues the old v1-v7 localStorage version-bump convention, but now
-// enforced as a real field ON the state object itself and checked on load
-// (see isCompatibleSave below), since IndexedDB only ever has the one
-// 'current' key (data/indexedDbStorage.js) — there's no separate versioned
-// key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 13;
+// Bumped whenever the persisted state's SHAPE changes (v14: "The 50-man
+// Roster System" arc's Phase 2 adds taxiRosterByTeamId — up to 5 players
+// per team, a subset of the Reserve pool, real-genuinely used in game
+// simulation as rest/injury relief; see engine/taxiSquad.js) — continues
+// the old v1-v7 localStorage version-bump convention, but now enforced as
+// a real field ON the state object itself and checked on load (see
+// isCompatibleSave below), since IndexedDB only ever has the one 'current'
+// key (data/indexedDbStorage.js) — there's no separate versioned key to
+// bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 14;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -248,6 +250,44 @@ export async function loadStateAsync() {
   }
 }
 
+/**
+ * "50-man Roster System" arc, Phase 2 — builds the roster-resolution
+ * closures engine/ledgerCup.js's simulateSeasonWithCup needs to actually
+ * use Taxi Squad/expansion players in simulated games, plus the
+ * teamId -> Set(taxi ids) map resolveAvailableRoster/resolveRestedRoster
+ * use to apply shuttle fatigue. `getTeamRosterWithTaxi` (base 26 + that
+ * team's live taxi players in `bench`) doubles as the base `getTeamRoster`
+ * arg for EVERY open regular-season week, not just non-expanded ones — Taxi
+ * Squad relief applies all season, unlike expansion, which only kicks in
+ * from the trigger week onward (`getExpandedTeamRoster` layers 2 more
+ * reserve players on top of the same taxi-augmented base).
+ * @param {object[]} currentTeams
+ * @param {Map<string, object>} rosterByTeamId
+ * @param {Map<string, string[]>} reserveRosterByTeamId
+ * @param {Map<string, string[]>} taxiRosterByTeamId
+ * @param {Map<string, object>} affiliateRosterByClubId
+ * @returns {{getTeamRosterWithTaxi: (teamId: string) => object, getExpandedTeamRoster: (teamId: string) => object, taxiIdsByTeamId: Map<string, Set<string>>}}
+ */
+function buildTaxiAugmentedRosterFns(currentTeams, rosterByTeamId, reserveRosterByTeamId, taxiRosterByTeamId, affiliateRosterByClubId) {
+  const taxiIdsByTeamId = new Map(currentTeams.map((t) => [t.id, new Set(taxiRosterByTeamId.get(t.id) ?? [])]));
+
+  function getTeamRosterWithTaxi(teamId) {
+    const base = rosterByTeamId.get(teamId);
+    const taxiPlayers = resolveTaxiPlayers(teamId, taxiRosterByTeamId.get(teamId) ?? [], affiliateRosterByClubId);
+    return { ...base, bench: [...base.bench, ...taxiPlayers] };
+  }
+
+  function getExpandedTeamRoster(teamId) {
+    const withTaxi = getTeamRosterWithTaxi(teamId);
+    const expansionPlayers = buildExpansionBenchPlayers(
+      teamId, reserveRosterByTeamId, taxiRosterByTeamId.get(teamId) ?? [], affiliateRosterByClubId
+    );
+    return { ...withTaxi, bench: [...withTaxi.bench, ...expansionPlayers] };
+  }
+
+  return { getTeamRosterWithTaxi, getExpandedTeamRoster, taxiIdsByTeamId };
+}
+
 export function computeFreshSeason1State() {
   const rosterByTeamId = new Map(teams.map((t) => [t.id, getTeamRoster(t.id)]));
   const managerByTeamId = new Map(teams.map((t) => [t.id, getTeamManager(t.id)]));
@@ -261,6 +301,19 @@ export function computeFreshSeason1State() {
   // header for why this is a designation over EXISTING players, not new
   // generation).
   const reserveRosterByTeamId = new Map(teams.map((t) => [t.id, computeInitialReserveRoster(t.id, affiliateRosterByClubId)]));
+
+  // 50-man Roster System, Phase 2 — up to TAXI_SQUAD_SIZE of each team's
+  // OWN reserve pool designated as this season's Taxi Squad (never a
+  // separate pool — see engine/taxiSquad.js's header). Every player on the
+  // finalized list burns one option year for this season, per the
+  // "designated at the start of the season" / "single blanket option"
+  // design (Player Movement doc) — real bookkeeping now, enforcement is
+  // Phase 5's job.
+  const taxiRosterByTeamId = new Map(teams.map((t) => [t.id, computeInitialTaxiSquad(t.id, reserveRosterByTeamId, affiliateRosterByClubId)]));
+  for (const team of teams) incrementOptionYearsUsed(team.id, taxiRosterByTeamId.get(team.id), affiliateRosterByClubId);
+  const { getTeamRosterWithTaxi, getExpandedTeamRoster, taxiIdsByTeamId } = buildTaxiAugmentedRosterFns(
+    teams, rosterByTeamId, reserveRosterByTeamId, taxiRosterByTeamId, affiliateRosterByClubId
+  );
 
   // Tournament Quotient (Ledger Cup arc, Phase 2) — the 50 real teams are
   // established clubs being newly rated for the first time, not fictional
@@ -293,10 +346,15 @@ export function computeFreshSeason1State() {
   // season 2 (see advanceToNextSeason).
   const { seasonResult, weekPlan } = simulateSeasonWithCup(
     teams,
-    (id) => rosterByTeamId.get(id),
+    getTeamRosterWithTaxi,
     (id) => managerByTeamId.get(id),
     rng,
-    null
+    null,
+    null,
+    undefined,
+    getExpandedTeamRoster,
+    EXPANSION_TRIGGER_WEEKS_REMAINING,
+    taxiIdsByTeamId
   );
   // Regular-season fold — a pure post-hoc pass over this season's own
   // already-complete results array (see engine/tournamentQuotient.js's
@@ -380,6 +438,7 @@ export function computeFreshSeason1State() {
     quotientByTeamId,
     cupState,
     reserveRosterByTeamId,
+    taxiRosterByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }
@@ -474,13 +533,27 @@ export function advanceToNextSeason(state) {
     state.reserveRosterByTeamId // read-only here (a protected reserve fit, if consumed, is reflected via affiliateRosterByClubId's own mutation above) — revalidation/top-up happens below, after this season's own affiliate composition is fully settled
   );
 
+  // 50-man Roster System, Phase 2 — this season's own games use the PRIOR
+  // season's already-finalized Taxi Squad/Reserve lists (state.*, matching
+  // the same "not continuously live-updated mid-season" precedent Phase 1
+  // established for the Reserve pool itself — see the revalidation below,
+  // which computes the NEW lists this season's own churn produces, ready
+  // for the FOLLOWING season's games, not this one).
+  const { getTeamRosterWithTaxi, getExpandedTeamRoster, taxiIdsByTeamId } = buildTaxiAugmentedRosterFns(
+    teamsForNextSeason, rosterByTeamId, state.reserveRosterByTeamId, state.taxiRosterByTeamId, state.affiliateRosterByClubId
+  );
+
   const { seasonResult, weekPlan, cupGroupResults, cupKnockoutResult } = simulateSeasonWithCup(
     teamsForNextSeason,
-    (id) => rosterByTeamId.get(id),
+    getTeamRosterWithTaxi,
     (id) => managerByTeamId.get(id),
     rng,
     cupGroups,
-    cupKnockout
+    cupKnockout,
+    undefined,
+    getExpandedTeamRoster,
+    EXPANSION_TRIGGER_WEEKS_REMAINING,
+    taxiIdsByTeamId
   );
   quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
   // Cup group-stage games fold in too, at their own (higher) K_CONTEXT —
@@ -607,6 +680,24 @@ export function advanceToNextSeason(state) {
     ])
   );
 
+  // 50-man Roster System, Phase 2 — same "revalidate after this season's
+  // full churn has settled" timing as the Reserve pool above, using the
+  // JUST-revalidated reserveRosterByTeamId (never state.reserveRosterByTeamId
+  // — a taxi id must be valid against the CURRENT reserve list, not the
+  // stale prior one). Every player on the finalized list burns another
+  // option year for this season (every season he's on it, not just his
+  // first — confirmed by the user), mutating state.affiliateRosterByClubId
+  // in place, same ownership contract as everything else this arc touches.
+  const taxiRosterByTeamId = new Map(
+    teamsForNextSeason.map((t) => [
+      t.id,
+      revalidateAndTopUpTaxiSquad(
+        t.id, state.taxiRosterByTeamId.get(t.id) ?? [], reserveRosterByTeamId.get(t.id) ?? [], state.affiliateRosterByClubId
+      ),
+    ])
+  );
+  for (const t of teamsForNextSeason) incrementOptionYearsUsed(t.id, taxiRosterByTeamId.get(t.id), state.affiliateRosterByClubId);
+
   return {
     seasonNumber,
     asOfDate,
@@ -633,6 +724,7 @@ export function advanceToNextSeason(state) {
     quotientByTeamId,
     cupState,
     reserveRosterByTeamId,
+    taxiRosterByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };
 }

@@ -379,6 +379,35 @@ function ReserveRosterCard({ teamId }) {
   );
 }
 
+// "50-man Roster System" arc, Phase 2 — a designated SUBSET of the Reserve
+// pool above (never a separate pool, see engine/taxiSquad.js's header).
+// Unlike Reserve, Taxi Squad players genuinely get pulled into simulated
+// MLB games as real rest/injury relief over the season — optionYearsUsed
+// is shown here since every season on the Taxi Squad burns one (real
+// bookkeeping now; enforcement of the 3-year cap is a later phase's job).
+function TaxiSquadCard({ teamId }) {
+  const { getTaxiSquad } = useLeagueState();
+  const entries = getTaxiSquad(teamId);
+
+  return (
+    <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
+      <div className="px-4 py-2 text-[11px] uppercase tracking-wider text-brass-bright/80 border-b border-field-line flex items-center justify-between">
+        <span>Taxi Squad</span>
+        <span className="text-[10px] text-ledger/40 normal-case tracking-normal">{entries.length} designated</span>
+      </div>
+      {entries.length === 0 && <div className="px-4 py-3 text-xs text-ledger/40">No players currently designated.</div>}
+      {entries.map(({ player, level }) => (
+        <div key={player.id} className="grid grid-cols-[minmax(9rem,1fr)_3rem_2.5rem_5rem] px-4 py-1 text-sm border-b border-field-line last:border-b-0">
+          <span className="text-ledger/85 truncate">{player.firstName} {player.lastName}</span>
+          <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
+          <span className="text-right agate text-[11px] text-ledger/40">{level}</span>
+          <span className="text-right agate text-[11px] text-ledger/40">{player.optionYearsUsed} option{player.optionYearsUsed === 1 ? '' : 's'}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function TeamDetail() {
   const { id } = useParams();
   const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges } = useLeagueState();
@@ -425,6 +454,7 @@ export default function TeamDetail() {
         <ManagerCard manager={manager} changes={managerChanges} />
         <FarmSystemCard teamId={team.id} />
         <ReserveRosterCard teamId={team.id} />
+        <TaxiSquadCard teamId={team.id} />
         <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} />
         <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} />
         <SeasonResultsTable teamId={team.id} teamsById={teamsById} />

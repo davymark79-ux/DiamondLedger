@@ -72,6 +72,37 @@ export function applyFatigue(player, consecutiveGamesPlayed) {
   return withPerformanceModifiers(player, deltas);
 }
 
+// Shuttle fatigue ("50-man Roster System" arc, Phase 2, engine/taxiSquad.js)
+// — the design doc asks for Taxi Squad players to take on "more fatigue,
+// especially if moving large distances between teams." This codebase has no
+// real geography anywhere (AffiliateClub/Team `city` fields are cosmetic
+// names drawn from a random pool, not real coordinates), so there's no real
+// distance to compute a deterministic magnitude from — modeled honestly as
+// rng variance instead, a flagged simplification. Lives here (not in
+// taxiSquad.js, which needs to stay import-cycle-free from engine/season.js)
+// since it's the same "one-game, on-field-attribute rating dip" shape as
+// applyFatigue above, just a different trigger and no workload state to
+// track.
+const SHUTTLE_FATIGUE_MIN = 1;
+const SHUTTLE_FATIGUE_MAX = 4;
+
+/**
+ * Applies a one-game shuttle-fatigue penalty to a Taxi Squad player who's
+ * actually being used in today's game (called from resolveAvailableRoster/
+ * resolveRestedRoster in engine/season.js only when the chosen replacement's
+ * id is in the caller's taxiIdSet — a player who ISN'T actually subbed in
+ * this game never takes this hit).
+ * @param {object} player - Player
+ * @param {() => number} rng
+ * @returns {object} Player, ratings nudged down
+ */
+export function applyShuttleFatigue(player, rng) {
+  const penalty = SHUTTLE_FATIGUE_MIN + rng() * (SHUTTLE_FATIGUE_MAX - SHUTTLE_FATIGUE_MIN);
+  const deltas = {};
+  for (const attribute of FATIGUE_ATTRIBUTES) deltas[attribute] = -penalty;
+  return withPerformanceModifiers(player, deltas);
+}
+
 // Even a maximally-fatigued player under a fully-Analytics-leaning manager
 // isn't a guaranteed sit — some real-world unpredictability/stubbornness
 // even for a load-management-minded skipper. Illustrative placeholder, same

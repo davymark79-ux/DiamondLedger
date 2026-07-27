@@ -227,6 +227,25 @@ export function LeagueStateProvider({ children }) {
     return results;
   }
 
+  // 50-man Roster System, Phase 2 — same "resolve live against the CURRENT
+  // AAA/AA rosters" pattern as getReserveRoster above (Taxi Squad is always
+  // a subset of the Reserve pool, see engine/taxiSquad.js's header). Taxi
+  // players actually enter simulated games during the season (unlike the
+  // rest of the Reserve pool) — data/season.js's incrementOptionYearsUsed
+  // is what keeps each player's own optionYearsUsed field current.
+  function getTaxiSquad(teamId) {
+    const taxiIds = new Set(state.taxiRosterByTeamId.get(teamId) ?? []);
+    if (taxiIds.size === 0) return [];
+    const results = [];
+    for (const level of ['AAA', 'AA']) {
+      const roster = getAffiliateRoster(`${teamId}-${level}`);
+      for (const player of [...roster.lineup, ...roster.rotation, ...roster.bullpen, ...roster.bench]) {
+        if (taxiIds.has(player.id)) results.push({ player, level });
+      }
+    }
+    return results;
+  }
+
   // Domestic Draft (engine/draft.js) — this season's real draft, already
   // fully self-contained (selections carry player display fields directly,
   // see data/season.js's runDraftAndCollegePathway) so no extra lookup is
@@ -463,6 +482,7 @@ export function LeagueStateProvider({ children }) {
     getAffiliateRoster,
     getAffiliateStandings,
     getReserveRoster,
+    getTaxiSquad,
     getDraftResult,
     getCollegeSummary,
     getTeamCollegeRightsCount,

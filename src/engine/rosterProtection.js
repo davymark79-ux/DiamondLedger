@@ -31,7 +31,11 @@ export const RESERVE_ROSTER_SIZE = 24;
 // just AAA depth — confirmed scope, not AAA-only.
 const RESERVE_ELIGIBLE_LEVELS = ['AAA', 'AA'];
 
-function eligiblePlayersForTeam(teamId, affiliateRosterByClubId) {
+// Exported — engine/taxiSquad.js (the "50-man Roster System" arc's Phase 2)
+// reuses this directly to resolve a team's Taxi Squad ids (a subset of the
+// same AAA+AA pool) into real player objects, same reason
+// findBestFit/generateForLevel are exported from minorLeagues.js.
+export function eligiblePlayersForTeam(teamId, affiliateRosterByClubId) {
   const players = [];
   for (const level of RESERVE_ELIGIBLE_LEVELS) {
     const roster = affiliateRosterByClubId.get(`${teamId}-${level}`);

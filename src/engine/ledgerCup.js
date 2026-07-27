@@ -18,6 +18,7 @@
 import { createSeasonState, simulateGamesIntoState, buildGroupSchedule, TARGET_GAMES_PER_TEAM } from './season.js';
 import { buildCalendarSeasonSchedule } from './calendar.js';
 import { QUOTIENT_CENTER } from './tournamentQuotient.js';
+import { getExpansionTriggerWeekIndex } from './rosterExpansion.js';
 import { TIERS, LEAGUE_IDS } from '../models/constants.js';
 
 // 3 round-robin weekends per in-season-tournament.md ("each team plays each
@@ -397,18 +398,53 @@ function interleaveByesWithPlayInWinners(byes, playInWinners) {
  * @param {{groups: string[][]}|null} cupGroups - from drawCupGroups, or null for no group stage this season
  * @param {{seeds: string[], byes: object[], playInPairs: object[]}|null} cupKnockout - from buildKnockoutBracket, or null for no pending knockout this season
  * @param {number} [gamesPerSeason]
+ * @param {(teamId: string) => object|null} [getExpandedTeamRoster] - "50-man
+ *   Roster System" arc, Phase 2. Same shape as getTeamRoster, but with the
+ *   26-man Active Roster Expansion's +2 bench players already appended (see
+ *   engine/rosterExpansion.js's buildExpansionBenchPlayers). Used instead of
+ *   getTeamRoster for OPEN regular-season weeks from the expansion trigger
+ *   week onward. Defaults to null (no expansion ever activates) — every
+ *   existing caller unaffected.
+ * @param {number|null} [expansionTriggerWeeksRemaining] - passed straight
+ *   through to getExpansionTriggerWeekIndex; null means expansion never
+ *   activates even if getExpandedTeamRoster is supplied.
+ * @param {Map<string, Set<string>>} [taxiIdsByTeamId] - "50-man Roster
+ *   System" arc, Phase 2. Passed through to simulateGamesIntoState's own
+ *   option of the same name for every OPEN regular-season week (never for
+ *   Cup group-stage/knockout games — Taxi Squad/expansion are regular-
+ *   season-only mechanics, see commissioner-vision-and-roster-rules.md).
+ *   Defaults to an empty Map (no-op).
  * @returns {{schedule: object[], weekPlan: object, seasonResult: object, cupGroupResults: object[]|null, cupKnockoutResult: object|null}}
  *   cupGroupResults/cupKnockoutResult's games are the flat/nested arrays of every Cup game played this season —
  *   NOT included in seasonResult.results, so a caller folding them into Quotient must do so separately (see
  *   engine/tournamentQuotient.js's foldResultsArray, at K_CONTEXT.CUP_GROUP_STAGE/CUP_KNOCKOUT respectively).
  */
-export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng, cupGroups, cupKnockout = null, gamesPerSeason = TARGET_GAMES_PER_TEAM) {
+export function simulateSeasonWithCup(
+  teams,
+  getTeamRoster,
+  getTeamManager,
+  rng,
+  cupGroups,
+  cupKnockout = null,
+  gamesPerSeason = TARGET_GAMES_PER_TEAM,
+  getExpandedTeamRoster = null,
+  expansionTriggerWeeksRemaining = null,
+  taxiIdsByTeamId = new Map()
+) {
   const calendarOptions = {
     ...(cupKnockout ? { firstHalfBlackoutWeeks: 4 } : {}),
     ...(cupGroups ? { secondHalfBlackoutWeeks: GROUP_STAGE_WEEKENDS } : {}),
   };
   const { schedule, weekPlan } = buildCalendarSeasonSchedule(teams, gamesPerSeason, rng, calendarOptions);
   const seasonState = createSeasonState(teams, getTeamManager);
+
+  // "50-man Roster System" arc, Phase 2 — null when expansionTriggerWeeksRemaining
+  // isn't supplied, so `week.index >= expansionTriggerWeekIndex` below is
+  // never true and getTeamRoster is always used, matching pre-Phase-2 behavior.
+  const expansionTriggerWeekIndex =
+    getExpandedTeamRoster && expansionTriggerWeeksRemaining != null
+      ? getExpansionTriggerWeekIndex(weekPlan, expansionTriggerWeeksRemaining)
+      : null;
 
   const cupWeekends = cupGroups ? buildCupGroupStageWeekends(teams, cupGroups.groups, rng).weekends : null;
   // Separate, LOCAL rotation counters for group-stage and knockout games —
@@ -484,7 +520,12 @@ export function simulateSeasonWithCup(teams, getTeamRoster, getTeamManager, rng,
       finalResult = result.series[0];
     } else if (week.kind === 'OPEN') {
       const weekGames = scheduleByWeek.get(week.index) ?? [];
-      simulateGamesIntoState(seasonState, teams, getTeamRoster, weekGames, rng);
+      // "50-man Roster System" arc, Phase 2 — 26-man Active Roster
+      // Expansion only applies to real regular-season games (Cup group-
+      // stage/knockout branches above never reach this branch), and only
+      // once expansionTriggerWeekIndex is reached.
+      const rosterFn = expansionTriggerWeekIndex != null && week.index >= expansionTriggerWeekIndex ? getExpandedTeamRoster : getTeamRoster;
+      simulateGamesIntoState(seasonState, teams, rosterFn, weekGames, rng, { taxiIdsByTeamId });
     }
   }
 

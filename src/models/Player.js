@@ -119,6 +119,14 @@ export function createPlayer(overrides = {}) {
     // sustainedGameNumber }. `gamesRemaining` is a hard eligibility floor,
     // not an estimate — see engine/injuries.js's header for why.
     injury: overrides.injury ?? null,
+
+    // Player Movement doc's "Options" section — a season-long Taxi Squad
+    // designation automatically burns one option year (see
+    // engine/taxiSquad.js), tracked here starting with the "50-man Roster
+    // System" arc's Phase 2. Real enforcement (the 3-year cap, 20-day/
+    // 5-assignment thresholds) is Phase 5's job; this is honest bookkeeping
+    // only, so that phase doesn't have to start counting from zero.
+    optionYearsUsed: overrides.optionYearsUsed ?? 0,
   };
 }
 
