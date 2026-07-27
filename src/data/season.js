@@ -63,6 +63,7 @@ import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '..
 import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayers, incrementOptionYearsUsed } from '../engine/taxiSquad.js';
 import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
 import { assignMissingContracts } from '../engine/contracts.js';
+import { advanceServiceTime } from '../engine/serviceTime.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -72,16 +73,16 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v15: "The 50-man
-// Roster System" arc's Phase 3 adds a real `contract` field to every
-// org-affiliated player — active roster, Reserve pool, and every other
-// AAA/AA/A/Rookie affiliate player; see engine/contracts.js) — continues
-// the old v1-v7 localStorage version-bump convention, but now enforced as
-// a real field ON the state object itself and checked on load (see
-// isCompatibleSave below), since IndexedDB only ever has the one 'current'
-// key (data/indexedDbStorage.js) — there's no separate versioned key to
-// bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 15;
+// Bumped whenever the persisted state's SHAPE changes (v16: "The 50-man
+// Roster System" arc's Phase 4 adds a real `serviceRecord` field to every
+// org-affiliated player — a running day/season-accrual counter feeding
+// free agency/arbitration/Rule 5/10-and-5 eligibility math; see
+// engine/serviceTime.js) — continues the old v1-v7 localStorage
+// version-bump convention, but now enforced as a real field ON the state
+// object itself and checked on load (see isCompatibleSave below), since
+// IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
+// — there's no separate versioned key to bump the way localStorage had.
+export const STATE_SCHEMA_VERSION = 16;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -421,6 +422,12 @@ export function computeFreshSeason1State() {
   // season 1 starts from scratch — is left untouched).
   assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, asOfDate);
 
+  // 50-man Roster System, Phase 4 — credits every org-affiliated player a
+  // full season of service (see engine/serviceTime.js's own header for
+  // why this is a running counter, unlike assignMissingContracts above:
+  // every player gets credited every season, not just once).
+  advanceServiceTime(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, 1, asOfDate);
+
   return {
     seasonNumber: 1,
     asOfDate,
@@ -713,6 +720,16 @@ export function advanceToNextSeason(state) {
   // existing contract (see engine/contracts.js's own header) — every
   // player who already had one before this transition keeps it unchanged.
   assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, state.affiliateRosterByClubId, asOfDate);
+
+  // 50-man Roster System, Phase 4 — credits everyone a season of service
+  // for the season that just ran. Uses `rosterByTeamId` (advanceOffseason's
+  // return — what this season's games actually used), but
+  // state.reserveRosterByTeamId, the PRIOR, already-in-effect list — NOT
+  // the just-revalidated `reserveRosterByTeamId` local (that's NEXT
+  // season's designation) — same "credit what was actually true this
+  // season" timing Phase 2/3 already established for the taxi/contract
+  // roster closures.
+  advanceServiceTime(rosterByTeamId, state.reserveRosterByTeamId, state.affiliateRosterByClubId, seasonNumber, asOfDate);
 
   return {
     seasonNumber,

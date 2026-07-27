@@ -61,6 +61,34 @@ function StreakTag({ playerId }) {
   );
 }
 
+// "50-man Roster System" arc, Phase 4 (engine/serviceTime.js) — same
+// small-conditional-badge convention as InjuryTag/FatigueTag/StreakTag
+// above. Only the two states genuinely meaningful for an ACTIVE roster
+// player: Free-Agency-eligible and Arbitration-eligible (Rule 5 exposure
+// only ever applies to non-active affiliate depth, so it's never checked
+// here — see getPlayerServiceInfo's own header).
+function ServiceTag({ playerId }) {
+  const { getPlayerServiceInfo } = useLeagueState();
+  const info = getPlayerServiceInfo(playerId);
+  if (!info) return null;
+  const years = info.years.toFixed(1);
+  if (info.freeAgencyEligible) {
+    return (
+      <span className="ml-1.5 text-[10px] text-brass-bright/80 whitespace-nowrap" title={`${years} years of MLB service`}>
+        FA
+      </span>
+    );
+  }
+  if (info.arbitrationEligible) {
+    return (
+      <span className="ml-1.5 text-[10px] text-navy-bright/80 whitespace-nowrap" title={`${years} years of MLB service`}>
+        ARB
+      </span>
+    );
+  }
+  return null;
+}
+
 // international-tournament-and-nationality.md — purely cosmetic flavor
 // data, never affects any sim outcome. Quiet by design: a plain-USA,
 // no-heritage player (the common case) renders nothing at all; anyone
@@ -106,6 +134,7 @@ function PositionPlayerRow({ player }) {
         <InjuryTag playerId={player.id} />
         <FatigueTag playerId={player.id} />
         <StreakTag playerId={player.id} />
+        <ServiceTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>
@@ -152,6 +181,7 @@ function PitcherRow({ player, role }) {
         {player.firstName} {player.lastName}
         <NationalityTag player={player} />
         <InjuryTag playerId={player.id} />
+        <ServiceTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{role}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>

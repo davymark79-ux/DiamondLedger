@@ -25,6 +25,7 @@ import {
   signEstablishedFreeAgent as signEstablishedFreeAgentEngine,
 } from '../engine/freeAgency.js';
 import { computeTeamPayroll, computeLuxuryTaxOwed, SALARY_FLOOR, LUXURY_TAX_THRESHOLD } from '../engine/contracts.js';
+import { computeServiceYears, isFreeAgencyEligible, isArbitrationEligible } from '../engine/serviceTime.js';
 
 const LeagueStateContext = createContext(null);
 
@@ -171,6 +172,21 @@ export function LeagueStateProvider({ children }) {
   // record yet this season — see engine/hotColdStreaks.js.
   function getPlayerStreakState(playerId) {
     return state.seasonResult.streakStateById.get(playerId) ?? null;
+  }
+
+  // "50-man Roster System" arc, Phase 4 (engine/serviceTime.js) — resolves
+  // against `playersById` (active-26 only), so this is meaningful for
+  // free-agency/arbitration eligibility specifically (Rule 5 exposure only
+  // ever applies to NON-active, unprotected affiliate depth, so it's
+  // deliberately not exposed here).
+  function getPlayerServiceInfo(playerId) {
+    const player = playersById.get(playerId);
+    if (!player?.serviceRecord) return null;
+    return {
+      years: computeServiceYears(player.serviceRecord.mlbServiceDays),
+      freeAgencyEligible: isFreeAgencyEligible(player.serviceRecord),
+      arbitrationEligible: isArbitrationEligible(player.serviceRecord),
+    };
   }
 
   // Current manager as of the end of the current live season — managers.md's
@@ -490,6 +506,7 @@ export function LeagueStateProvider({ children }) {
     getPlayerFatigueStatus,
     getPlayerFatiguePenalty,
     getPlayerStreakState,
+    getPlayerServiceInfo,
     getCurrentTeamManager,
     getTeamManagerChanges,
     getLeagueWireEvents,

@@ -135,6 +135,13 @@ export function createPlayer(overrides = {}) {
     // for everyone else, starting with the "50-man Roster System" arc's
     // Phase 3.
     contract: overrides.contract ?? null,
+
+    // player-movement.md's "Service Time & Free Agency" section — see
+    // engine/serviceTime.js. Same null-outside-an-organization convention
+    // as `contract` above — a real ServiceRecord (models/ServiceRecord.js)
+    // for everyone org-affiliated, starting with the "50-man Roster
+    // System" arc's Phase 4.
+    serviceRecord: overrides.serviceRecord ?? null,
   };
 }
 

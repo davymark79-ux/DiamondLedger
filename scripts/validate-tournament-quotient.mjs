@@ -178,7 +178,7 @@ console.log('\n=== 6. Real season-1 bootstrap wiring ===\n');
   const withDecay = decayQuotientsForNewSeason(expected);
   assert(sortedEntriesJson(state.quotientByTeamId) !== sortedEntriesJson(withDecay), 'season 1 correctly did NOT apply a decay step (no prior season exists to decay from)');
 
-  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 15, `schemaVersion is the current STATE_SCHEMA_VERSION, 15 (got ${state.schemaVersion})`);
+  assert(state.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 16, `schemaVersion is the current STATE_SCHEMA_VERSION, 16 (got ${state.schemaVersion})`);
 
   const keys = [...state.quotientByTeamId.keys()].sort();
   const expectedKeys = teams.map((t) => t.id).sort();
