@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import TierBadge from '../components/TierBadge';
@@ -115,7 +116,7 @@ function ownershipDisplay(ownership) {
   return `Single Owner (Wealth ${Math.round(ownership.ownerWealth * 100)}/100)`;
 }
 
-const POSITION_PLAYER_GRID = 'grid-cols-[minmax(9rem,1fr)_2rem_2.25rem_2.5rem_2.25rem_2.25rem_2.25rem_2.25rem_2.25rem]';
+const POSITION_PLAYER_GRID = 'grid-cols-[minmax(9rem,1fr)_2rem_2.25rem_2.5rem_2.25rem_2.25rem_2.25rem_2.25rem_2.25rem_4rem]';
 
 function SectionLabelRow({ gridColsClass, label }) {
   return (
@@ -125,7 +126,54 @@ function SectionLabelRow({ gridColsClass, label }) {
   );
 }
 
-function PositionPlayerRow({ player }) {
+// "50-man Roster System" arc, Phase 5 (engine/optionsWaiversDfa.js) — the
+// first real, user-triggered ACTIVE-roster transaction on this page
+// beyond free-agent signing. Self-contained via the hook for reading
+// eligibility (same pattern as InjuryTag/FatigueTag/StreakTag/ServiceTag
+// above), but takes `onAction` as a prop to report its outcome up to
+// TeamDetail's own result banner — a DFA's three real outcomes (claimed/
+// outright-assigned/refused) aren't obvious just from the row
+// disappearing, unlike a plain option send-down.
+function RosterActionButton({ playerId, teamId, onAction }) {
+  const { isSimulating, getPlayerHasOptionsRemaining, optionPlayerToMinors, designateForAssignment } = useLeagueState();
+  const hasOptions = getPlayerHasOptionsRemaining(playerId);
+  if (hasOptions === null) return null;
+
+  async function handleClick() {
+    if (hasOptions) {
+      const result = await optionPlayerToMinors(playerId, teamId);
+      onAction(result ? 'Optioned to the AAA affiliate.' : 'That option assignment could not be completed.');
+      return;
+    }
+    const result = await designateForAssignment(playerId, teamId);
+    if (!result) {
+      onAction('That DFA could not be completed.');
+      return;
+    }
+    const outcomeMessages = {
+      CLAIMED: 'Claimed off waivers by another club — they assume his contract.',
+      OUTRIGHT_ASSIGNED: 'Unclaimed on waivers — outright-assigned to the AAA affiliate.',
+      REFUSED_FREE_AGENCY: 'Unclaimed on waivers — he refused the assignment and elected free agency.',
+    };
+    onAction(outcomeMessages[result.outcome]);
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isSimulating}
+      className={`px-1.5 py-1 text-[10px] rounded-sm border transition-colors disabled:opacity-40 disabled:pointer-events-none ${
+        hasOptions
+          ? 'border-field-line text-navy-bright/80 hover:text-navy-bright hover:border-navy-bright/50'
+          : 'border-field-line text-brick-bright/80 hover:text-brick-bright hover:border-brick-bright/50'
+      }`}
+    >
+      {hasOptions ? 'Option' : 'DFA'}
+    </button>
+  );
+}
+
+function PositionPlayerRow({ player, teamId, onAction }) {
   return (
     <div className={`grid ${POSITION_PLAYER_GRID} px-4 py-1 text-sm border-b border-field-line`}>
       <span className="text-ledger/85 truncate">
@@ -144,11 +192,12 @@ function PositionPlayerRow({ player }) {
       <span className="text-right agate text-ledger/70">{player.ratings.eye.current}</span>
       <span className="text-right agate text-ledger/70">{player.ratings.speed.current}</span>
       <span className="text-right agate text-ledger/70">{player.ratings.fielding.current}</span>
+      <span className="text-right"><RosterActionButton playerId={player.id} teamId={teamId} onAction={onAction} /></span>
     </div>
   );
 }
 
-function PositionPlayersTable({ lineup, bench }) {
+function PositionPlayersTable({ lineup, bench, teamId, onAction }) {
   return (
     <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
       <div className="px-4 py-2 text-[11px] uppercase tracking-wider text-brass-bright/80 border-b border-field-line">
@@ -164,17 +213,18 @@ function PositionPlayersTable({ lineup, bench }) {
         <span className="text-right">Eye</span>
         <span className="text-right">Spd</span>
         <span className="text-right">Fld</span>
+        <span></span>
       </div>
-      {lineup.map((player) => <PositionPlayerRow key={player.id} player={player} />)}
+      {lineup.map((player) => <PositionPlayerRow key={player.id} player={player} teamId={teamId} onAction={onAction} />)}
       <SectionLabelRow gridColsClass={POSITION_PLAYER_GRID} label="Bench" />
-      {bench.map((player) => <PositionPlayerRow key={player.id} player={player} />)}
+      {bench.map((player) => <PositionPlayerRow key={player.id} player={player} teamId={teamId} onAction={onAction} />)}
     </div>
   );
 }
 
-const PITCHER_GRID = 'grid-cols-[minmax(9rem,1fr)_3.5rem_2.25rem_3rem_2.25rem_2.25rem_2.25rem_2.25rem_2.25rem]';
+const PITCHER_GRID = 'grid-cols-[minmax(9rem,1fr)_3.5rem_2.25rem_3rem_2.25rem_2.25rem_2.25rem_2.25rem_2.25rem_4rem]';
 
-function PitcherRow({ player, role }) {
+function PitcherRow({ player, role, teamId, onAction }) {
   return (
     <div className={`grid ${PITCHER_GRID} px-4 py-1 text-sm border-b border-field-line`}>
       <span className="text-ledger/85 truncate">
@@ -191,6 +241,7 @@ function PitcherRow({ player, role }) {
       <span className="text-right agate text-ledger/70">{player.ratings.movement.current}</span>
       <span className="text-right agate text-ledger/70">{player.ratings.stamina.current}</span>
       <span className="text-right agate text-ledger/70">{player.ratings.pitchability.current}</span>
+      <span className="text-right"><RosterActionButton playerId={player.id} teamId={teamId} onAction={onAction} /></span>
     </div>
   );
 }
@@ -199,7 +250,7 @@ function PitcherRow({ player, role }) {
 // realLeague.js's getTeamRoster() for why Closer has to stay last.
 const BULLPEN_ROLE_LABELS = ['Long', 'Middle', 'Setup', 'Depth 1', 'Depth 2', 'Depth 3', 'Depth 4', 'Closer'];
 
-function PitchersTable({ rotation, bullpen }) {
+function PitchersTable({ rotation, bullpen, teamId, onAction }) {
   return (
     <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
       <div className="px-4 py-2 text-[11px] uppercase tracking-wider text-brass-bright/80 border-b border-field-line">
@@ -215,11 +266,12 @@ function PitchersTable({ rotation, bullpen }) {
         <span className="text-right">Mov</span>
         <span className="text-right">Sta</span>
         <span className="text-right">Pit</span>
+        <span></span>
       </div>
       <SectionLabelRow gridColsClass={PITCHER_GRID} label="Rotation" />
-      {rotation.map((player, i) => <PitcherRow key={player.id} player={player} role={`SP${i + 1}`} />)}
+      {rotation.map((player, i) => <PitcherRow key={player.id} player={player} role={`SP${i + 1}`} teamId={teamId} onAction={onAction} />)}
       <SectionLabelRow gridColsClass={PITCHER_GRID} label="Bullpen" />
-      {bullpen.map((player, i) => <PitcherRow key={player.id} player={player} role={BULLPEN_ROLE_LABELS[i]} />)}
+      {bullpen.map((player, i) => <PitcherRow key={player.id} player={player} role={BULLPEN_ROLE_LABELS[i]} teamId={teamId} onAction={onAction} />)}
     </div>
   );
 }
@@ -441,6 +493,11 @@ function TaxiSquadCard({ teamId }) {
 export default function TeamDetail() {
   const { id } = useParams();
   const { teams, getTeamRoster, getTeamRecord, getCurrentTeamManager, getTeamManagerChanges, getTeamPayroll } = useLeagueState();
+  // "50-man Roster System" arc, Phase 5 — Option/DFA result banner, same
+  // "lastResult" pattern FreeAgents.jsx already established. Declared
+  // before the early "team not found" return below, same as every other
+  // hook in this component, per the Rules of Hooks.
+  const [actionResult, setActionResult] = useState(null);
   const team = teams.find((t) => t.id === id);
 
   if (!team) {
@@ -483,13 +540,19 @@ export default function TeamDetail() {
         ))}
       </div>
 
+      {actionResult && (
+        <div className="mb-4 px-3 py-2 text-xs rounded-sm border border-brass-bright/30 text-brass-bright/90">
+          {actionResult}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4">
         <ManagerCard manager={manager} changes={managerChanges} />
         <FarmSystemCard teamId={team.id} />
         <ReserveRosterCard teamId={team.id} />
         <TaxiSquadCard teamId={team.id} />
-        <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} />
-        <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} />
+        <PositionPlayersTable lineup={roster.lineup} bench={roster.bench} teamId={team.id} onAction={setActionResult} />
+        <PitchersTable rotation={roster.rotation} bullpen={roster.bullpen} teamId={team.id} onAction={setActionResult} />
         <SeasonResultsTable teamId={team.id} teamsById={teamsById} />
       </div>
     </div>

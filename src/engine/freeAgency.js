@@ -144,8 +144,11 @@ export function signAmateurFreeAgent(playerId, teamId, freeAgentPoolById, affili
 // position needs an exact primaryPosition match WITHIN the lineup section —
 // falls back to the whole section if positionReassignment.js drift has left
 // nobody at that exact slot (a real, not just theoretical, possibility over
-// many simulated seasons).
-function candidatesForSigning(roster, sectionKey, position) {
+// many simulated seasons). Exported — engine/optionsWaiversDfa.js (the
+// "50-man Roster System" arc's Phase 5) reuses this exact same-section
+// weakest-player search for waiver-claim make-room logic, rather than
+// redefining it a second time.
+export function candidatesForSigning(roster, sectionKey, position) {
   if (sectionKey !== 'lineup') return roster[sectionKey];
   const exact = roster.lineup.filter((p) => p.primaryPosition === position);
   return exact.length > 0 ? exact : roster.lineup;

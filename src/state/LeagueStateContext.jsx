@@ -25,6 +25,12 @@ import {
   signEstablishedFreeAgent as signEstablishedFreeAgentEngine,
 } from '../engine/freeAgency.js';
 import { computeTeamPayroll, computeLuxuryTaxOwed, SALARY_FLOOR, LUXURY_TAX_THRESHOLD } from '../engine/contracts.js';
+import {
+  optionPlayerToMinors as optionPlayerToMinorsEngine,
+  designateForAssignment as designateForAssignmentEngine,
+  hasOptionsRemaining,
+} from '../engine/optionsWaiversDfa.js';
+import { computeCombinedReverseStandingsOrder } from '../engine/draft.js';
 import { computeServiceYears, isFreeAgencyEligible, isArbitrationEligible } from '../engine/serviceTime.js';
 
 const LeagueStateContext = createContext(null);
@@ -187,6 +193,16 @@ export function LeagueStateProvider({ children }) {
       freeAgencyEligible: isFreeAgencyEligible(player.serviceRecord),
       arbitrationEligible: isArbitrationEligible(player.serviceRecord),
     };
+  }
+
+  // "50-man Roster System" arc, Phase 5 — which action button TeamDetail.jsx
+  // should offer for an active-26 player: "Option" while he has options
+  // left, "DFA" once he's out (see engine/optionsWaiversDfa.js's
+  // OPTION_YEARS_CAP).
+  function getPlayerHasOptionsRemaining(playerId) {
+    const player = playersById.get(playerId);
+    if (!player?.serviceRecord) return null;
+    return hasOptionsRemaining(player);
   }
 
   // Current manager as of the end of the current live season — managers.md's
@@ -392,6 +408,49 @@ export function LeagueStateProvider({ children }) {
     return result;
   }
 
+  // "50-man Roster System" arc, Phase 5 (engine/optionsWaiversDfa.js) —
+  // the in-options path: sends an active-26 player to teamId's AAA
+  // affiliate without waivers. Both engine functions below already
+  // construct their own fresh Map instances internally (unlike
+  // signEstablishedFreeAgentEngine above, which is pure w.r.t. the
+  // roster and leaves Map construction to this caller) — this wrapper
+  // just adopts whatever they return.
+  async function optionPlayerToMinors(playerId, teamId) {
+    if (isSimulating) return null;
+    const result = optionPlayerToMinorsEngine(playerId, teamId, state.rosterByTeamId, state.affiliateRosterByClubId);
+    if (!result) return null;
+    const next = { ...state, rosterByTeamId: result.updatedRosterByTeamId, affiliateRosterByClubId: result.updatedAffiliateRosterByClubId };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
+  // The out-of-options / emergency-room path — one atomic action
+  // resolving to CLAIMED, OUTRIGHT_ASSIGNED, or REFUSED_FREE_AGENCY (see
+  // engine/optionsWaiversDfa.js's own header for why this collapses real
+  // MLB's 7-day DFA window into a single call). Waiver priority is
+  // computed fresh each call from the CURRENT season's own standings —
+  // engine/draft.js's computeCombinedReverseStandingsOrder, the same
+  // reverse-combined-standings function the doc itself was written
+  // expecting this phase to reuse.
+  async function designateForAssignment(playerId, teamId) {
+    if (isSimulating) return null;
+    const waiverPriorityOrder = computeCombinedReverseStandingsOrder(teams, state.seasonResult.standingsById);
+    const result = designateForAssignmentEngine(
+      playerId, teamId, state.rosterByTeamId, state.affiliateRosterByClubId, waiverPriorityOrder, state.establishedFreeAgentPoolById
+    );
+    if (!result) return null;
+    const next = {
+      ...state,
+      rosterByTeamId: result.updatedRosterByTeamId,
+      affiliateRosterByClubId: result.affiliateRosterByClubId,
+      establishedFreeAgentPoolById: result.establishedFreeAgentPoolById,
+    };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -507,6 +566,7 @@ export function LeagueStateProvider({ children }) {
     getPlayerFatiguePenalty,
     getPlayerStreakState,
     getPlayerServiceInfo,
+    getPlayerHasOptionsRemaining,
     getCurrentTeamManager,
     getTeamManagerChanges,
     getLeagueWireEvents,
@@ -529,6 +589,8 @@ export function LeagueStateProvider({ children }) {
     signCollegeFreeAgent,
     signInternationalFreeAgent,
     signEstablishedFreeAgent,
+    optionPlayerToMinors,
+    designateForAssignment,
   };
 
   // Blocks rendering `children` (and every page's useLeagueState() calls)

@@ -73,16 +73,26 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v16: "The 50-man
-// Roster System" arc's Phase 4 adds a real `serviceRecord` field to every
-// org-affiliated player — a running day/season-accrual counter feeding
-// free agency/arbitration/Rule 5/10-and-5 eligibility math; see
-// engine/serviceTime.js) — continues the old v1-v7 localStorage
-// version-bump convention, but now enforced as a real field ON the state
-// object itself and checked on load (see isCompatibleSave below), since
+// Bumped whenever the persisted state's SHAPE changes (v17: "The 50-man
+// Roster System" arc's Phase 5 adds standardOptionYearsUsed/
+// wasOutrightedBefore to every player's serviceRecord; see
+// engine/optionsWaiversDfa.js — a REAL bug caught live, not just in
+// theory: a save already persisted under v16 has serviceRecord objects
+// that predate these two fields, so they read as `undefined` on load,
+// and `undefined < OPTION_YEARS_CAP` is `false` — this silently made
+// hasOptionsRemaining() return false for EVERY player, showing "DFA"
+// instead of "Option" across an entire already-in-progress save. Adding
+// fields with defaults in the factory function only protects BRAND NEW
+// objects going forward, not ones serialized before the change existed.
+// Every prior phase in this arc bumped the schema for exactly this
+// reason; this phase's own plan initially assumed a bump wasn't needed
+// ("additive defaults") and was wrong, caught here during live
+// verification) — continues the old v1-v7 localStorage version-bump
+// convention, but now enforced as a real field ON the state object
+// itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 16;
+export const STATE_SCHEMA_VERSION = 17;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
