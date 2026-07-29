@@ -30,6 +30,7 @@ import {
   designateForAssignment as designateForAssignmentEngine,
   hasOptionsRemaining,
 } from '../engine/optionsWaiversDfa.js';
+import { executeTrade as executeTradeEngine } from '../engine/trades.js';
 import { computeCombinedReverseStandingsOrder } from '../engine/draft.js';
 import { computeServiceYears, isFreeAgencyEligible, isArbitrationEligible } from '../engine/serviceTime.js';
 
@@ -451,6 +452,31 @@ export function LeagueStateProvider({ children }) {
     return result;
   }
 
+  // "50-man Roster System" arc, Phase 6 (engine/trades.js) — the arc's
+  // first genuinely BILATERAL action: both teams' rosters change in one
+  // atomic move. On MEDICAL_REVIEW_FAILED, returns the result as-is with
+  // NO dispatch — nothing happened, same "null/failure result means no
+  // state change" convention every other action wrapper already follows.
+  async function proposeTrade(teamAId, teamBId, playerIdsFromA, playerIdsFromB) {
+    if (isSimulating) return null;
+    const result = executeTradeEngine(
+      teamAId, teamBId, playerIdsFromA, playerIdsFromB,
+      state.rosterByTeamId, state.reserveRosterByTeamId, state.taxiRosterByTeamId, state.affiliateRosterByClubId
+    );
+    if (!result) return null;
+    if (result.outcome === 'MEDICAL_REVIEW_FAILED') return result;
+    const next = {
+      ...state,
+      rosterByTeamId: result.updatedRosterByTeamId,
+      reserveRosterByTeamId: result.updatedReserveRosterByTeamId,
+      taxiRosterByTeamId: result.updatedTaxiRosterByTeamId,
+      affiliateRosterByClubId: result.updatedAffiliateRosterByClubId,
+    };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -591,6 +617,7 @@ export function LeagueStateProvider({ children }) {
     signEstablishedFreeAgent,
     optionPlayerToMinors,
     designateForAssignment,
+    proposeTrade,
   };
 
   // Blocks rendering `children` (and every page's useLeagueState() calls)

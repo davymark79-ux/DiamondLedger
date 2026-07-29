@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutGrid, ListOrdered, Users, CalendarDays, Landmark, ScrollText, Trophy, PlayCircle, Award, Medal, ClipboardList, Handshake } from 'lucide-react';
+import { LayoutGrid, ListOrdered, Users, CalendarDays, Landmark, ScrollText, Trophy, PlayCircle, Award, Medal, ClipboardList, Handshake, ArrowLeftRight } from 'lucide-react';
 
 const links = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
@@ -7,6 +7,7 @@ const links = [
   { to: '/playoffs', label: 'Playoffs', icon: Medal },
   { to: '/draft', label: 'Draft', icon: ClipboardList },
   { to: '/free-agents', label: 'Free Agents', icon: Handshake },
+  { to: '/trades', label: 'Trades', icon: ArrowLeftRight },
   { to: '/teams', label: 'Teams', icon: Users },
   { to: '/schedule', label: 'Schedule', icon: CalendarDays },
   { to: '/box-score', label: 'Box Score', icon: PlayCircle },

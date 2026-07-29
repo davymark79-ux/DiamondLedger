@@ -14,6 +14,7 @@ import BoxScore from './pages/BoxScore';
 import HallOfFame from './pages/HallOfFame';
 import Draft from './pages/Draft';
 import FreeAgents from './pages/FreeAgents';
+import Trades from './pages/Trades';
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="/hall-of-fame" element={<HallOfFame />} />
               <Route path="/draft" element={<Draft />} />
               <Route path="/free-agents" element={<FreeAgents />} />
+              <Route path="/trades" element={<Trades />} />
             </Routes>
           </main>
         </div>
