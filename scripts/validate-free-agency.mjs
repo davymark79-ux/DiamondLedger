@@ -235,9 +235,26 @@ console.log('\n=== 9. Real wiring: data/season.js ===\n');
   sizeHistory.push(currentState.establishedFreeAgentPoolById.size);
 
   // A real multi-season loop, same technique as College's/International's
-  // own stability checks — confirms the pool's size never increases absent
-  // any signings (the flagged closed-loop limitation, demonstrated not
-  // just asserted). Continues the SAME forward chain from state2 above —
+  // own stability checks. **Updated in Phase 7 of the "50-man Roster
+  // System" arc (engine/arbitration.js).** This used to assert the pool's
+  // size never increases absent any signings — true when the pool was
+  // genuinely closed-loop, and the demonstration of that flagged
+  // limitation. Non-tenders are now a real inflow, so that assertion is
+  // obsolete BY DESIGN (the engine is right; the assertion was stale) —
+  // same situation validate:draft's own section 11 hit when the College
+  // System deliberately replaced its 100%-sign-rate assumption.
+  //
+  // What's asserted instead is the pair of properties that actually matter
+  // now: the pool genuinely REFILLS (proving non-tenders reach it), and it
+  // stays BOUNDED rather than growing without limit.
+  //
+  // Honest note on the long run, since it would be easy to overclaim from
+  // a short sample: non-tenders do not permanently reverse the decline.
+  // They produce a large early injection (the first cohort of players
+  // whose age-proxy salaries are badly misaligned with real service-time
+  // value all get corrected at once), after which arbitration keeps
+  // salaries tracking market value, fewer players are overpaid, and the
+  // pool resumes draining via retirement. Continues the SAME forward chain from state2 above —
   // calling advanceToNextSeason twice from the same starting state would
   // double-process that season's draft/college pathway against
   // already-mutated Maps with the identical deterministic rng (exactly the
@@ -248,9 +265,19 @@ console.log('\n=== 9. Real wiring: data/season.js ===\n');
     sizeHistory.push(currentState.establishedFreeAgentPoolById.size);
   }
   console.log(`  established free-agent pool size across 15 seasons: ${sizeHistory.join(', ')}`);
-  for (let i = 1; i < sizeHistory.length; i++) {
-    assert(sizeHistory[i] <= sizeHistory[i - 1], `season ${i}: pool size never increases absent any signings (${sizeHistory[i - 1]} -> ${sizeHistory[i]})`);
-  }
+
+  const growthSeasons = sizeHistory.filter((n, i) => i > 0 && n > sizeHistory[i - 1]).length;
+  assert(growthSeasons > 0, `the pool genuinely refills at least once across 15 seasons — Phase 7's non-tenders really reach it (${growthSeasons} growth season(s))`);
+
+  const peak = Math.max(...sizeHistory);
+  assert(peak < 5000, `the pool stays bounded rather than growing without limit (peak ${peak})`);
+
+  // The tail still drains — arbitration aligns salaries to market value
+  // over time, so the non-tender inflow tapers. Asserted explicitly so a
+  // future change that accidentally makes the pool grow forever fails
+  // here rather than passing quietly.
+  const secondHalf = sizeHistory.slice(Math.floor(sizeHistory.length / 2));
+  assert(secondHalf.at(-1) < secondHalf[0], `the long-run trend still drains rather than compounding (${secondHalf[0]} -> ${secondHalf.at(-1)} across the back half)`);
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

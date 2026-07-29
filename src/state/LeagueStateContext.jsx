@@ -57,6 +57,14 @@ function formatWinPct(pct) {
   return `.${String(Math.round(pct * 1000)).padStart(3, '0')}`;
 }
 
+// Arbitration figures land across a wide range (a first-year-eligible
+// player near the league minimum, a fifth-year star in the millions), so
+// this switches units rather than rendering "$0.8M" — Financials.jsx's own
+// formatter stays millions-only because team payroll never gets that small.
+function formatSalary(dollars) {
+  return dollars < 1_000_000 ? `$${Math.round(dollars / 1_000)}K` : `$${(dollars / 1_000_000).toFixed(1)}M`;
+}
+
 // Replaces realLeague.js's static playersById for anything reading the
 // LIVE roster state — a retiree is replaced by a brand-new player object
 // with a brand-new id over time, so the static map goes stale the moment a
@@ -477,6 +485,14 @@ export function LeagueStateProvider({ children }) {
     return result;
   }
 
+  // "50-man Roster System" arc, Phase 7 (engine/arbitration.js) — this
+  // offseason's arbitration hearings and non-tenders. Season-scoped, like
+  // promotionRelegationSwaps: resolved entering the current season, not a
+  // running multi-season history.
+  function getArbitrationResult() {
+    return state.arbitrationResult ?? { hearings: [], nonTenders: [] };
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -508,6 +524,33 @@ export function LeagueStateProvider({ children }) {
         gameNumber: firing.gameNumber,
         team: team ? `${team.city} ${team.nickname}` : '—',
         detail: `Fired ${fired ? `${fired.firstName} ${fired.lastName}` : 'their manager'} (${formatWinPct(firing.winPctAtFiring)}), hired ${hired ? `${hired.firstName} ${hired.lastName}` : 'a replacement'}.`,
+      });
+    }
+
+    // "50-man Roster System" arc, Phase 7 (engine/arbitration.js) —
+    // arbitration hearings and non-tenders both resolved in the offseason
+    // entering THIS season, so they sort alongside promotion/relegation as
+    // the oldest events in the feed (see the gameNumber -1 note below).
+    for (const h of state.arbitrationResult?.hearings ?? []) {
+      const team = teamsById.get(h.teamId);
+      const wonBy = h.winner === 'PLAYER' ? 'the player' : 'the club';
+      events.push({
+        id: `arbitration-${h.playerId}-${state.seasonNumber}`,
+        type: 'arbitration',
+        gameNumber: -1,
+        team: team ? `${team.city} ${team.nickname}` : '—',
+        detail: `${h.firstName} ${h.lastName} (${h.primaryPosition}) went to arbitration — club filed ${formatSalary(h.clubFigure)}, player filed ${formatSalary(h.playerFigure)}. Arbitrator sided with ${wonBy}: ${formatSalary(h.awardedSalary)}.`,
+      });
+    }
+
+    for (const n of state.arbitrationResult?.nonTenders ?? []) {
+      const team = teamsById.get(n.teamId);
+      events.push({
+        id: `nontender-${n.playerId}-${state.seasonNumber}`,
+        type: 'nonTender',
+        gameNumber: -1,
+        team: team ? `${team.city} ${team.nickname}` : '—',
+        detail: `${n.firstName} ${n.lastName} (${n.primaryPosition}) was non-tendered and is now a free agent — was earning ${formatSalary(n.previousSalary)} against an estimated ${formatSalary(n.marketValue)} of current value.`,
       });
     }
 
@@ -595,6 +638,7 @@ export function LeagueStateProvider({ children }) {
     getPlayerHasOptionsRemaining,
     getCurrentTeamManager,
     getTeamManagerChanges,
+    getArbitrationResult,
     getLeagueWireEvents,
     buildMatchup,
     getAffiliateClub,

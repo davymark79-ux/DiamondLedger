@@ -7,7 +7,12 @@ import { useLeagueState } from '../state/LeagueStateContext.jsx';
 // categories had no underlying system at all (the design doc's Scripted
 // Event framework was never built, see CLAUDE.md). Dropped rather than
 // kept as dead filter options.
-const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation'];
+const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation', 'arbitration', 'nonTender'];
+
+// 'nonTender' is the one type whose camelCase id doesn't read well under
+// the filter buttons' `capitalize` class — everything else is a single
+// lowercase word already.
+const TYPE_LABELS = { nonTender: 'Non-Tender' };
 
 export default function Events() {
   const [filter, setFilter] = useState('all');
@@ -20,7 +25,7 @@ export default function Events() {
       <PageHeader
         eyebrow="Season Activity"
         title="League Wire"
-        description="Real injury, manager Firing & Rehiring, and promotion/relegation events from the simulated season. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings and promotion/relegation are both complete logs. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
+        description="Real injury, manager Firing & Rehiring, promotion/relegation, and arbitration/non-tender events from the simulated season. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings, promotion/relegation, and arbitration are all complete logs. Arbitration hearings and non-tenders resolve in the offseason entering the current season, so they file alongside promotion/relegation at Season Start. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
       />
 
       <div className="flex gap-1 mb-5 flex-wrap">
@@ -32,7 +37,7 @@ export default function Events() {
               filter === t ? 'bg-brass text-field-dark font-medium' : 'text-ledger/50 hover:text-ledger bg-field-dark border border-field-line'
             }`}
           >
-            {t}
+            {TYPE_LABELS[t] ?? t}
           </button>
         ))}
       </div>
@@ -47,7 +52,7 @@ export default function Events() {
             <div key={e.id} className="px-5 py-3.5">
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase tracking-wider text-brass-bright/80">{e.type}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-brass-bright/80">{TYPE_LABELS[e.type] ?? e.type}</span>
                   <span className="text-xs text-ledger/40">{e.team}</span>
                 </div>
                 <span className="agate text-[11px] text-ledger/35">{e.gameNumber >= 0 ? `Game ${e.gameNumber}` : 'Season Start'}</span>

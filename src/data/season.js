@@ -64,6 +64,7 @@ import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayer
 import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
 import { assignMissingContracts } from '../engine/contracts.js';
 import { advanceServiceTime } from '../engine/serviceTime.js';
+import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -73,7 +74,10 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v17: "The 50-man
+// Bumped whenever the persisted state's SHAPE changes (v18: "The 50-man
+// Roster System" arc's Phase 7 adds a persisted `arbitrationResult` field
+// — a new top-level key on the state object, so a v17 save genuinely
+// lacks it. v17: "The 50-man
 // Roster System" arc's Phase 5 adds standardOptionYearsUsed/
 // wasOutrightedBefore to every player's serviceRecord; see
 // engine/optionsWaiversDfa.js — a REAL bug caught live, not just in
@@ -92,7 +96,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 17;
+export const STATE_SCHEMA_VERSION = 18;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -447,6 +451,10 @@ export function computeFreshSeason1State() {
     tierByTeamId: new Map(teams.map((t) => [t.id, t.tier])),
     divisionByTeamId: new Map(teams.map((t) => [t.id, t.division])),
     promotionRelegationSwaps: [], // nothing to promote/relegate yet — no prior season exists to evaluate
+    // Same "nothing to evaluate yet" shape as promotionRelegationSwaps
+    // above: service time only starts accruing at the END of season 1, so
+    // nobody can be arbitration-eligible before a real season transition.
+    arbitrationResult: { hearings: [], nonTenders: [] },
     playoffResult,
     seasonResult,
     weekPlan,
@@ -741,9 +749,30 @@ export function advanceToNextSeason(state) {
   // roster closures.
   advanceServiceTime(rosterByTeamId, state.reserveRosterByTeamId, state.affiliateRosterByClubId, seasonNumber, asOfDate);
 
+  // 50-man Roster System, Phase 7 — runs LAST, strictly AFTER
+  // advanceServiceTime above, so a player who just crossed the 3-year
+  // threshold with this season's own credit gets his hearing in this same
+  // offseason rather than waiting a full extra year. The FIRST thing in
+  // this codebase to legitimately change an existing player's salary
+  // (engine/contracts.js's assignMissingContracts is sticky-once-assigned
+  // and its own header says "Phase 7 owns real renegotiation").
+  //
+  // Deliberately NOT run in computeFreshSeason1State: service time only
+  // starts accruing at the end of season 1, so nobody can be
+  // arbitration-eligible before a real season transition has happened.
+  const arbitrationResult = runArbitrationAndTenderSweep(
+    rosterByTeamId,
+    state.establishedFreeAgentPoolById,
+    new Map(teamsForNextSeason.map((t) => [t.id, t])),
+    state.affiliateRosterByClubId,
+    rng,
+    asOfDate
+  );
+
   return {
     seasonNumber,
     asOfDate,
+    arbitrationResult,
     rosterByTeamId,
     managerByTeamId,
     roleStateById: state.roleStateById,
