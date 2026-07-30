@@ -493,6 +493,20 @@ export function LeagueStateProvider({ children }) {
     return state.arbitrationResult ?? { hearings: [], nonTenders: [] };
   }
 
+  // "50-man Roster System" arc, Phase 8 (engine/rule5Draft.js) — this
+  // offseason's Rule 5 selections plus how LAST season's picks resolved
+  // (stuck vs. returned). Season-scoped, same as getArbitrationResult.
+  function getRule5Result() {
+    return state.rule5Result ?? { selections: [], stuck: [], returned: [] };
+  }
+
+  // Whether an active-roster player is still serving a Rule 5 obligation —
+  // drives TeamDetail.jsx's "R5" tag and explains why his Option button is
+  // unavailable (engine/optionsWaiversDfa.js refuses to option him).
+  function getPlayerRule5Status(playerId) {
+    return playersById.get(playerId)?.serviceRecord?.rule5 ?? null;
+  }
+
   // A real, league-wide activity feed — injuries (currently-active only,
   // a partial picture: a player hurt earlier who's already recovered
   // leaves no trace) and Firing & Rehiring events (a complete log for the
@@ -551,6 +565,34 @@ export function LeagueStateProvider({ children }) {
         gameNumber: -1,
         team: team ? `${team.city} ${team.nickname}` : '—',
         detail: `${n.firstName} ${n.lastName} (${n.primaryPosition}) was non-tendered and is now a free agent — was earning ${formatSalary(n.previousSalary)} against an estimated ${formatSalary(n.marketValue)} of current value.`,
+      });
+    }
+
+    // "50-man Roster System" arc, Phase 8 (engine/rule5Draft.js) — also an
+    // offseason event, so it files at Season Start alongside the rest.
+    for (const s of state.rule5Result?.selections ?? []) {
+      const to = teamsById.get(s.draftingTeamId);
+      const from = teamsById.get(s.originalTeamId);
+      events.push({
+        id: `rule5-${s.playerId}-${state.seasonNumber}`,
+        type: 'rule5',
+        gameNumber: -1,
+        team: to ? `${to.city} ${to.nickname}` : '—',
+        // No possessive here on purpose — most club nicknames already end
+        // in "s" (Zookeepers, Reels, Canals), so "...Zookeepers's A
+        // affiliate" reads badly across the majority of real events.
+        detail: `Selected ${s.firstName} ${s.lastName} (${s.primaryPosition}) in the Rule 5 draft out of ${from ? `${from.city} ${from.nickname}` : 'another club'} (${s.fromLevel}) — must stay on the active roster all season or be offered back.`,
+      });
+    }
+
+    for (const r of state.rule5Result?.returned ?? []) {
+      const home = teamsById.get(r.originalTeamId);
+      events.push({
+        id: `rule5return-${r.playerId}-${state.seasonNumber}`,
+        type: 'rule5',
+        gameNumber: -1,
+        team: home ? `${home.city} ${home.nickname}` : '—',
+        detail: `${r.firstName} ${r.lastName} (${r.primaryPosition}) was returned as a failed Rule 5 selection — his drafting club could not carry him all season.`,
       });
     }
 
@@ -639,6 +681,8 @@ export function LeagueStateProvider({ children }) {
     getCurrentTeamManager,
     getTeamManagerChanges,
     getArbitrationResult,
+    getRule5Result,
+    getPlayerRule5Status,
     getLeagueWireEvents,
     buildMatchup,
     getAffiliateClub,

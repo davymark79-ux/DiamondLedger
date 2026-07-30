@@ -223,7 +223,7 @@ console.log('\n=== 6. computeInitialReserveRoster / revalidateAndTopUpReserveRos
 console.log('\n=== 7. Real data/season.js wiring: season 1 bootstrap + season transition ===\n');
 {
   const state1 = computeFreshSeason1State();
-  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 18, `schemaVersion is the current STATE_SCHEMA_VERSION, 18 (got ${state1.schemaVersion})`);
+  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 19, `schemaVersion is the current STATE_SCHEMA_VERSION, 19 (got ${state1.schemaVersion})`);
   assert(state1.reserveRosterByTeamId.size === 50, `all 50 real teams have a reserve roster entry (got ${state1.reserveRosterByTeamId.size})`);
 
   let allExactly24 = true;

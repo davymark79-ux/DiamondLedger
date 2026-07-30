@@ -36,7 +36,8 @@
     "validate:servicetime": "node scripts/validate-service-time.mjs",
     "validate:ows": "node scripts/validate-options-waivers-dfa.mjs",
     "validate:trades": "node scripts/validate-trades.mjs",
-    "validate:arb": "node scripts/validate-arbitration.mjs"
+    "validate:arb": "node scripts/validate-arbitration.mjs",
+    "validate:rule5": "node scripts/validate-rule5.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

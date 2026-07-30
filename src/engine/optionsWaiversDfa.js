@@ -54,6 +54,20 @@ export function hasOptionsRemaining(player) {
   return player.serviceRecord.standardOptionYearsUsed < OPTION_YEARS_CAP;
 }
 
+/**
+ * "50-man Roster System" arc, Phase 8 (engine/rule5Draft.js) — a Rule 5
+ * pick still serving his obligation cannot be sent down at all, per
+ * player-movement.md: he "must be kept on the active 26-man MLB roster for
+ * the entire following season — he cannot be optioned to the minors — or
+ * must be offered back to his original club." This check is what gives
+ * that rule real teeth in a UI where the commissioner could otherwise just
+ * bury him at AAA.
+ * @param {object} player
+ */
+export function isRule5Restricted(player) {
+  return !!player.serviceRecord?.rule5;
+}
+
 function findOnRoster(roster, playerId) {
   for (const sectionKey of ROSTER_SECTIONS) {
     const found = roster[sectionKey].find((p) => p.id === playerId);
@@ -119,6 +133,8 @@ export function optionPlayerToMinors(playerId, teamId, rosterByTeamId, affiliate
   const found = findOnRoster(roster, playerId);
   if (!found) return null;
   const { player, sectionKey } = found;
+  // A Rule 5 pick may not be optioned at all — see isRule5Restricted.
+  if (isRule5Restricted(player)) return null;
   if (!hasOptionsRemaining(player)) return null;
 
   const clubId = `${teamId}-${SEND_DOWN_LEVEL}`;
@@ -167,6 +183,36 @@ export function designateForAssignment(playerId, teamId, rosterByTeamId, affilia
 
   const rosterByTeamIdAfterRemoval = new Map(rosterByTeamId);
   rosterByTeamIdAfterRemoval.set(teamId, removeFromRoster(roster, sectionKey, playerId));
+
+  // "50-man Roster System" arc, Phase 8 — a Rule 5 pick never reaches
+  // waivers: giving up on him means offering him BACK to the club he was
+  // drafted from, whose rights over him never fully transferred. A real
+  // fourth outcome, and the other half (with optionPlayerToMinors' refusal)
+  // of the doc's "must stick or get offered back" tension.
+  const rule5 = player.serviceRecord?.rule5;
+  if (rule5) {
+    const homeClubId = `${rule5.originalTeamId}-${SEND_DOWN_LEVEL}`;
+    const homeRoster = affiliateRosterByClubId.get(homeClubId);
+    const updatedAffiliates = new Map(affiliateRosterByClubId);
+    if (homeRoster) {
+      updatedAffiliates.set(
+        homeClubId,
+        addToRoster(homeRoster, sectionKey, {
+          ...player,
+          teamId: rule5.originalTeamId,
+          developmentLevel: DEVELOPMENT_LEVELS[SEND_DOWN_LEVEL],
+          serviceRecord: { ...player.serviceRecord, rule5: null },
+        })
+      );
+    }
+    return {
+      outcome: 'RETURNED_TO_ORIGINAL_CLUB',
+      returnedToTeamId: rule5.originalTeamId,
+      updatedRosterByTeamId: rosterByTeamIdAfterRemoval,
+      affiliateRosterByClubId: updatedAffiliates,
+      establishedFreeAgentPoolById,
+    };
+  }
 
   const waiverResult = resolveWaiverClaim(player, waiverPriorityOrder, rosterByTeamIdAfterRemoval);
   if (waiverResult.claimed) {

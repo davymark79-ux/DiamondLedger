@@ -30,6 +30,12 @@
  *   been outright-assigned to the minors before. Phase 4's
  *   isOutrightRefusalEligible took this as an external param specifically
  *   because it couldn't be computed until Phase 5 existed to set it.
+ * @property {{draftedSeasonNumber: number, originalTeamId: string}|null} rule5
+ *   - "50-man Roster System" arc Phase 8 (engine/rule5Draft.js). Non-null
+ *   only while a Rule-5-drafted player is still serving his obligation:
+ *   per player-movement.md he must be kept on the drafting club's active
+ *   26-man roster for the whole following season (he cannot be optioned)
+ *   or be offered back to `originalTeamId`. Cleared once he sticks.
  */
 
 /**
@@ -47,5 +53,6 @@ export function createServiceRecord(overrides) {
     wasEverProtected: overrides.wasEverProtected ?? false,
     standardOptionYearsUsed: overrides.standardOptionYearsUsed ?? 0,
     wasOutrightedBefore: overrides.wasOutrightedBefore ?? false,
+    rule5: overrides.rule5 ?? null,
   };
 }

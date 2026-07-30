@@ -65,6 +65,7 @@ import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '.
 import { assignMissingContracts } from '../engine/contracts.js';
 import { advanceServiceTime } from '../engine/serviceTime.js';
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
+import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -74,7 +75,11 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v18: "The 50-man
+// Bumped whenever the persisted state's SHAPE changes (v19: "The 50-man
+// Roster System" arc's Phase 8 adds a persisted `rule5Result` field AND a
+// new `rule5` key on every player's serviceRecord — a v18 save has
+// neither, and per the v17 note below, a missing field read as `undefined`
+// is exactly how Phase 5 shipped a real live bug. v18: "The 50-man
 // Roster System" arc's Phase 7 adds a persisted `arbitrationResult` field
 // — a new top-level key on the state object, so a v17 save genuinely
 // lacks it. v17: "The 50-man
@@ -96,7 +101,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 18;
+export const STATE_SCHEMA_VERSION = 19;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -455,6 +460,9 @@ export function computeFreshSeason1State() {
     // above: service time only starts accruing at the END of season 1, so
     // nobody can be arbitration-eligible before a real season transition.
     arbitrationResult: { hearings: [], nonTenders: [] },
+    // Same "nothing to evaluate yet" shape: Rule 5 exposure needs several
+    // accrued minor-league seasons, and season 1 credits the first one.
+    rule5Result: { selections: [], stuck: [], returned: [] },
     playoffResult,
     seasonResult,
     weekPlan,
@@ -760,6 +768,24 @@ export function advanceToNextSeason(state) {
   // Deliberately NOT run in computeFreshSeason1State: service time only
   // starts accruing at the end of season 1, so nobody can be
   // arbitration-eligible before a real season transition has happened.
+  // 50-man Roster System, Phase 8 — resolve LAST season's Rule 5
+  // obligations BEFORE running this season's draft, so a player who stuck
+  // has his flag cleared and can't be re-resolved, and anyone who was
+  // sent down is returned home before new picks are made. Runs after
+  // advanceServiceTime above so exposure counts reflect the season just
+  // credited.
+  const rule5Obligations = resolveRule5Obligations(rosterByTeamId, state.affiliateRosterByClubId, seasonNumber);
+  const rule5Draft = runRule5Draft(
+    teamsForNextSeason,
+    seasonResult.standingsById,
+    rosterByTeamId,
+    state.affiliateRosterByClubId,
+    seasonNumber,
+    rng,
+    asOfDate
+  );
+  const rule5Result = { selections: rule5Draft.selections, stuck: rule5Obligations.stuck, returned: rule5Obligations.returned };
+
   const arbitrationResult = runArbitrationAndTenderSweep(
     rosterByTeamId,
     state.establishedFreeAgentPoolById,
@@ -773,6 +799,7 @@ export function advanceToNextSeason(state) {
     seasonNumber,
     asOfDate,
     arbitrationResult,
+    rule5Result,
     rosterByTeamId,
     managerByTeamId,
     roleStateById: state.roleStateById,

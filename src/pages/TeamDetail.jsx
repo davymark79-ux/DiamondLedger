@@ -90,6 +90,26 @@ function ServiceTag({ playerId }) {
   return null;
 }
 
+// "50-man Roster System" arc, Phase 8 (engine/rule5Draft.js) — a player
+// still serving a Rule 5 obligation. Same quiet, conditional convention as
+// the tags above: nothing renders for the overwhelming majority. Pairs
+// with RosterActionButton below, which shows "Return" instead of "Option"
+// for exactly these players.
+function Rule5Tag({ playerId }) {
+  const { getPlayerRule5Status, teams } = useLeagueState();
+  const rule5 = getPlayerRule5Status(playerId);
+  if (!rule5) return null;
+  const from = teams.find((t) => t.id === rule5.originalTeamId);
+  return (
+    <span
+      className="ml-1.5 text-[10px] text-brick-bright/80 whitespace-nowrap"
+      title={`Rule 5 pick from ${from ? `${from.city} ${from.nickname}` : 'another club'} — must stay on the active roster all season and cannot be optioned`}
+    >
+      R5
+    </span>
+  );
+}
+
 // international-tournament-and-nationality.md — purely cosmetic flavor
 // data, never affects any sim outcome. Quiet by design: a plain-USA,
 // no-heritage player (the common case) renders nothing at all; anyone
@@ -135,12 +155,20 @@ function SectionLabelRow({ gridColsClass, label }) {
 // outright-assigned/refused) aren't obvious just from the row
 // disappearing, unlike a plain option send-down.
 function RosterActionButton({ playerId, teamId, onAction }) {
-  const { isSimulating, getPlayerHasOptionsRemaining, optionPlayerToMinors, designateForAssignment } = useLeagueState();
+  const { isSimulating, getPlayerHasOptionsRemaining, getPlayerRule5Status, optionPlayerToMinors, designateForAssignment } = useLeagueState();
   const hasOptions = getPlayerHasOptionsRemaining(playerId);
+  const rule5 = getPlayerRule5Status(playerId);
   if (hasOptions === null) return null;
 
+  // "50-man Roster System" arc, Phase 8 — a Rule 5 pick cannot be
+  // optioned at all (engine/optionsWaiversDfa.js refuses it outright), so
+  // offering an Option button that silently does nothing would be a lie.
+  // His only exit is a DFA, which returns him to his original club.
+  const isRule5 = !!rule5;
+  const canOption = hasOptions && !isRule5;
+
   async function handleClick() {
-    if (hasOptions) {
+    if (canOption) {
       const result = await optionPlayerToMinors(playerId, teamId);
       onAction(result ? 'Optioned to the AAA affiliate.' : 'That option assignment could not be completed.');
       return;
@@ -154,6 +182,7 @@ function RosterActionButton({ playerId, teamId, onAction }) {
       CLAIMED: 'Claimed off waivers by another club — they assume his contract.',
       OUTRIGHT_ASSIGNED: 'Unclaimed on waivers — outright-assigned to the AAA affiliate.',
       REFUSED_FREE_AGENCY: 'Unclaimed on waivers — he refused the assignment and elected free agency.',
+      RETURNED_TO_ORIGINAL_CLUB: 'A failed Rule 5 selection — returned to the club he was drafted from.',
     };
     onAction(outcomeMessages[result.outcome]);
   }
@@ -162,13 +191,14 @@ function RosterActionButton({ playerId, teamId, onAction }) {
     <button
       onClick={handleClick}
       disabled={isSimulating}
+      title={isRule5 ? 'Rule 5 pick — cannot be optioned; a DFA returns him to his original club' : undefined}
       className={`px-1.5 py-1 text-[10px] rounded-sm border transition-colors disabled:opacity-40 disabled:pointer-events-none ${
-        hasOptions
+        canOption
           ? 'border-field-line text-navy-bright/80 hover:text-navy-bright hover:border-navy-bright/50'
           : 'border-field-line text-brick-bright/80 hover:text-brick-bright hover:border-brick-bright/50'
       }`}
     >
-      {hasOptions ? 'Option' : 'DFA'}
+      {canOption ? 'Option' : isRule5 ? 'Return' : 'DFA'}
     </button>
   );
 }
@@ -183,6 +213,7 @@ function PositionPlayerRow({ player, teamId, onAction }) {
         <FatigueTag playerId={player.id} />
         <StreakTag playerId={player.id} />
         <ServiceTag playerId={player.id} />
+        <Rule5Tag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>
@@ -232,6 +263,7 @@ function PitcherRow({ player, role, teamId, onAction }) {
         <NationalityTag player={player} />
         <InjuryTag playerId={player.id} />
         <ServiceTag playerId={player.id} />
+        <Rule5Tag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{role}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>

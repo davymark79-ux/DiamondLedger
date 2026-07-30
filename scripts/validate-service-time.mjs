@@ -199,7 +199,7 @@ console.log('\n=== 7. advanceServiceTime: gap-filling, correct crediting per poo
 console.log('\n=== 8. Real data/season.js wiring: every org-affiliated player has a serviceRecord ===\n');
 {
   const state1 = computeFreshSeason1State();
-  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 18, `schemaVersion is the current STATE_SCHEMA_VERSION, 18 (got ${state1.schemaVersion})`);
+  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 19, `schemaVersion is the current STATE_SCHEMA_VERSION, 19 (got ${state1.schemaVersion})`);
 
   let totalPlayers = 0, missing = 0;
   for (const roster of state1.rosterByTeamId.values()) {

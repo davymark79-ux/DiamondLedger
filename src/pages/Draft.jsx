@@ -85,11 +85,12 @@ function IntlDraftRow({ pick, selection, teamsById }) {
 }
 
 export default function Draft() {
-  const { teams, getDraftResult, getInternationalDraftResult } = useLeagueState();
+  const { teams, getDraftResult, getInternationalDraftResult, getRule5Result } = useLeagueState();
   const [round, setRound] = useState(1);
   const [intlRound, setIntlRound] = useState(1);
   const draftResult = getDraftResult();
   const internationalDraftResult = getInternationalDraftResult();
+  const rule5Result = getRule5Result();
   const teamsById = new Map(teams.map((t) => [t.id, t]));
 
   const picksThisRound = draftResult.picks.filter((p) => p.round === round);
@@ -181,6 +182,46 @@ export default function Draft() {
         See a team's <Link to="/teams" className="text-brass-bright/80 hover:text-brass-bright">Farm System</Link> card for its International
         Signings count this season.
       </p>
+
+      <div className="mt-8 px-1 text-[11px] uppercase tracking-wider text-brass-bright/80">Rule 5 Draft</div>
+      <p className="text-xs text-ledger/40 mt-1 mb-3">
+        The anti-hoarding draft: a minor leaguer his club never added to the 50-man pool becomes exposed after 4 seasons (5 if he signed
+        under 19), and any other club may take him — worst-to-first, one pick each. A club only spends a pick on a clear upgrade, because
+        the commitment is real: a Rule 5 pick <span className="text-ledger/60">must stay on the active 26 all season and cannot be optioned</span>,
+        or he goes back to the club he came from.
+      </p>
+
+      {rule5Result.selections.length === 0 ? (
+        <div className="bg-field-dark border border-field-line rounded-sm px-4 py-6 text-center text-sm text-ledger/40">
+          No Rule 5 selections this season — nobody is exposed yet, or no club found an upgrade worth the roster commitment.
+        </div>
+      ) : (
+        <div className="bg-field-dark border border-field-line rounded-sm overflow-x-auto">
+          <div className="grid grid-cols-[minmax(9rem,1fr)_3rem_1fr_1fr_3rem] px-4 py-1 text-[10px] uppercase tracking-wider text-ledger/35 border-b border-field-line">
+            <span>Player</span>
+            <span>Pos</span>
+            <span>Drafted By</span>
+            <span>From</span>
+            <span className="text-right">Level</span>
+          </div>
+          {rule5Result.selections.map((s) => (
+            <div key={s.playerId} className="grid grid-cols-[minmax(9rem,1fr)_3rem_1fr_1fr_3rem] px-4 py-1.5 text-sm border-b border-field-line last:border-b-0">
+              <span className="text-ledger/85 truncate">{s.firstName} {s.lastName}</span>
+              <span className="agate text-ledger/70">{s.primaryPosition}</span>
+              <span className="text-brass-bright/80 truncate">{teamLabel(teamsById.get(s.draftingTeamId))}</span>
+              <span className="text-ledger/50 truncate">{teamLabel(teamsById.get(s.originalTeamId))}</span>
+              <span className="agate text-right text-ledger/60">{s.fromLevel}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(rule5Result.stuck.length > 0 || rule5Result.returned.length > 0) && (
+        <p className="text-xs text-ledger/40 mt-3">
+          Last season's picks resolved: <span className="text-brass-bright/80">{rule5Result.stuck.length} stuck</span> (carried all season, now
+          kept for good) · <span className="text-brick-bright/80">{rule5Result.returned.length} returned</span> to their original clubs.
+        </p>
+      )}
     </div>
   );
 }
