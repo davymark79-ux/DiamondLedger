@@ -36,6 +36,15 @@
  *   per player-movement.md he must be kept on the drafting club's active
  *   26-man roster for the whole following season (he cannot be optioned)
  *   or be offered back to `originalTeamId`. Cleared once he sticks.
+ * @property {number} consecutiveSeasonsWithOrg - "50-man Roster System"
+ *   arc Phase 9. Feeds isTenAndFiveEligible's second argument, which
+ *   Phase 4 took as an external param precisely because nothing tracked
+ *   it yet.
+ * @property {string|null} lastOrgTeamId - the org he belonged to as of the
+ *   last accrual sweep. Compared against his CURRENT teamId to detect an
+ *   org change, which is what makes consecutiveSeasonsWithOrg
+ *   self-correcting across trades/waiver claims/Rule 5/signings without
+ *   any of those transaction sites having to know about it.
  */
 
 /**
@@ -54,5 +63,7 @@ export function createServiceRecord(overrides) {
     standardOptionYearsUsed: overrides.standardOptionYearsUsed ?? 0,
     wasOutrightedBefore: overrides.wasOutrightedBefore ?? false,
     rule5: overrides.rule5 ?? null,
+    consecutiveSeasonsWithOrg: overrides.consecutiveSeasonsWithOrg ?? 0,
+    lastOrgTeamId: overrides.lastOrgTeamId ?? null,
   };
 }

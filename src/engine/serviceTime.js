@@ -159,6 +159,35 @@ function creditReserveSeason(player) {
   };
 }
 
+/**
+ * "50-man Roster System" arc, Phase 9 — org-continuity tracking, feeding
+ * isTenAndFiveEligible's `consecutiveYearsWithCurrentOrg` argument (which
+ * Phase 4 took as an external param precisely because nothing tracked it).
+ *
+ * **Deliberately implemented HERE, in one place, rather than as a reset
+ * call at every transaction site.** A player's org can change via trades
+ * (Phase 6), waiver claims (Phase 5), the Rule 5 draft and its returns
+ * (Phase 8), and free-agent signings — five sites today, and a sixth
+ * whenever a future phase adds another transaction type. Comparing his
+ * CURRENT teamId against the org he was in at the last sweep catches every
+ * one of them, including ones that don't exist yet, instead of relying on
+ * each site to remember a bookkeeping call it has no other reason to make.
+ * @param {object} player
+ * @param {string} teamId - the org he's in RIGHT NOW
+ */
+function withOrgContinuity(player, teamId) {
+  const record = player.serviceRecord;
+  const sameOrg = record.lastOrgTeamId === teamId;
+  return {
+    ...player,
+    serviceRecord: {
+      ...record,
+      consecutiveSeasonsWithOrg: sameOrg ? record.consecutiveSeasonsWithOrg + 1 : 1,
+      lastOrgTeamId: teamId,
+    },
+  };
+}
+
 function creditMinorsSeason(player) {
   return {
     ...player,
@@ -196,7 +225,9 @@ export function advanceServiceTime(rosterByTeamId, reserveRosterByTeamId, affili
   for (const [teamId, roster] of rosterByTeamId) {
     const updated = { ...roster };
     for (const sectionKey of ROSTER_SECTIONS) {
-      updated[sectionKey] = roster[sectionKey].map((p) => creditMlbSeason(ensureServiceRecord(p, currentSeasonNumber, asOfDate)));
+      updated[sectionKey] = roster[sectionKey].map((p) =>
+        withOrgContinuity(creditMlbSeason(ensureServiceRecord(p, currentSeasonNumber, asOfDate)), teamId)
+      );
     }
     rosterByTeamId.set(teamId, updated);
 
@@ -209,7 +240,8 @@ export function advanceServiceTime(rosterByTeamId, reserveRosterByTeamId, affili
       for (const sectionKey of ROSTER_SECTIONS) {
         updatedAff[sectionKey] = affRoster[sectionKey].map((p) => {
           const withRecord = ensureServiceRecord(p, currentSeasonNumber, asOfDate);
-          return reserveIds.has(p.id) ? creditReserveSeason(withRecord) : creditMinorsSeason(withRecord);
+          const credited = reserveIds.has(p.id) ? creditReserveSeason(withRecord) : creditMinorsSeason(withRecord);
+          return withOrgContinuity(credited, teamId);
         });
       }
       affiliateRosterByClubId.set(clubId, updatedAff);

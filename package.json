@@ -37,7 +37,8 @@
     "validate:ows": "node scripts/validate-options-waivers-dfa.mjs",
     "validate:trades": "node scripts/validate-trades.mjs",
     "validate:arb": "node scripts/validate-arbitration.mjs",
-    "validate:rule5": "node scripts/validate-rule5.mjs"
+    "validate:rule5": "node scripts/validate-rule5.mjs",
+    "validate:rights": "node scripts/validate-player-rights.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

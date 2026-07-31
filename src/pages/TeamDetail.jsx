@@ -110,6 +110,22 @@ function Rule5Tag({ playerId }) {
   );
 }
 
+// "50-man Roster System" arc, Phase 9 — full 10-and-5 no-trade protection
+// (10 years of MLB service, the last 5 with this club). Same quiet,
+// conditional convention as the tags above.
+function TenAndFiveTag({ playerId }) {
+  const { getPlayerTenAndFive } = useLeagueState();
+  if (!getPlayerTenAndFive(playerId)) return null;
+  return (
+    <span
+      className="ml-1.5 text-[10px] text-brass-bright/80 whitespace-nowrap"
+      title="10-and-5 rights — 10 years of MLB service, the last 5 with this club. Cannot be traded without his consent."
+    >
+      10-5
+    </span>
+  );
+}
+
 // international-tournament-and-nationality.md — purely cosmetic flavor
 // data, never affects any sim outcome. Quiet by design: a plain-USA,
 // no-heritage player (the common case) renders nothing at all; anyone
@@ -214,6 +230,7 @@ function PositionPlayerRow({ player, teamId, onAction }) {
         <StreakTag playerId={player.id} />
         <ServiceTag playerId={player.id} />
         <Rule5Tag playerId={player.id} />
+        <TenAndFiveTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>
@@ -264,6 +281,7 @@ function PitcherRow({ player, role, teamId, onAction }) {
         <InjuryTag playerId={player.id} />
         <ServiceTag playerId={player.id} />
         <Rule5Tag playerId={player.id} />
+        <TenAndFiveTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{role}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>

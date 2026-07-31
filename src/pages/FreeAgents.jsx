@@ -5,8 +5,8 @@ import { getAge } from '../models/Player.js';
 import { playerQualityScore } from '../engine/minorLeagues.js';
 import { NATION_CODES } from '../models/generation/nationalityPools.js';
 
-const POOL_FILTERS = ['ESTABLISHED', 'COLLEGE', 'INTERNATIONAL'];
-const POOL_LABELS = { ESTABLISHED: 'Established MLB', COLLEGE: 'College', INTERNATIONAL: 'International' };
+const POOL_FILTERS = ['ESTABLISHED', 'COLLEGE', 'INTERNATIONAL', 'MINOR_LEAGUE'];
+const POOL_LABELS = { ESTABLISHED: 'Established MLB', COLLEGE: 'College', INTERNATIONAL: 'International', MINOR_LEAGUE: 'Minor League' };
 
 // Real scope guard, not a nice-to-have: College's/International's pools
 // can reach ~1,100-1,700 entries at steady state (see CLAUDE.md §26/27's
@@ -58,6 +58,8 @@ export default function FreeAgents() {
     getCollegeFreeAgents,
     getInternationalFreeAgents,
     getEstablishedFreeAgents,
+    getMinorLeagueFreeAgents,
+    signMinorLeagueFreeAgent,
     signCollegeFreeAgent,
     signInternationalFreeAgent,
     signEstablishedFreeAgent,
@@ -75,11 +77,13 @@ export default function FreeAgents() {
   const collegeFreeAgents = getCollegeFreeAgents();
   const internationalFreeAgents = getInternationalFreeAgents();
   const establishedFreeAgents = getEstablishedFreeAgents();
+  const minorLeagueFreeAgents = getMinorLeagueFreeAgents();
 
   const poolData = {
     ESTABLISHED: establishedFreeAgents,
     COLLEGE: collegeFreeAgents,
     INTERNATIONAL: internationalFreeAgents,
+    MINOR_LEAGUE: minorLeagueFreeAgents,
   };
   const activePool = poolData[pool];
   const sorted = [...activePool].sort((a, b) => playerQualityScore(b) - playerQualityScore(a));
@@ -87,12 +91,17 @@ export default function FreeAgents() {
 
   async function handleSign(playerId, teamId) {
     let result = null;
-    if (pool === 'COLLEGE') result = await signCollegeFreeAgent(playerId, teamId);
+    if (pool === 'MINOR_LEAGUE') result = await signMinorLeagueFreeAgent(playerId, teamId);
+    else if (pool === 'COLLEGE') result = await signCollegeFreeAgent(playerId, teamId);
     else if (pool === 'INTERNATIONAL') result = await signInternationalFreeAgent(playerId, teamId);
     else result = await signEstablishedFreeAgent(playerId, teamId);
 
     if (!result) {
       setLastResult({ ok: false, text: 'That signing could not be completed (stale listing) — refresh and try again.' });
+      return;
+    }
+    if (pool === 'MINOR_LEAGUE') {
+      setLastResult({ ok: true, text: `Signed to ${teamLabel(teamId)} (${result.level}) — a minor-league free agent, back in an organization.` });
       return;
     }
     if (pool === 'ESTABLISHED') {
@@ -101,7 +110,10 @@ export default function FreeAgents() {
         text: `Signed to ${teamLabel(teamId)} — released their weakest ${result.sectionKey} player to make room.`,
       });
     } else {
-      setLastResult({ ok: true, text: `Signed to ${teamLabel(teamId)}'s ${result.level} affiliate.` });
+      // No possessive: most club nicknames already end in "s" (Torpedoes,
+      // Roses, Canals), so "...Torpedoes's AAA affiliate" reads badly for
+      // the majority of clubs.
+      setLastResult({ ok: true, text: `Signed to ${teamLabel(teamId)} (${result.level} affiliate).` });
     }
   }
 
@@ -110,7 +122,7 @@ export default function FreeAgents() {
       <PageHeader
         eyebrow="Open Market"
         title="Free Agents"
-        description="Three separate pools: established MLB/MLB2-quality players available for direct signing to a team's 26-man roster (releasing that team's weakest player at the same position to make room — no waiver/DFA system exists yet), plus College and International amateur free agents who sign onto a team's farm system instead. The established pool is closed-loop — it only shrinks (retirement) or churns (sign-in/release-out), with no season-to-season replenishment modeled yet."
+        description="Four separate pools, each a genuinely different population. Established MLB/MLB2-quality players sign directly to a team's 26-man roster (releasing that team's weakest same-position player to make room). College and International amateur free agents sign onto a team's farm system instead. Minor League free agents are career minor leaguers who accrued 7 seasons without ever being added to a 50-man roster and walked on their own — they also sign to an affiliate. The established pool is no longer fully closed-loop: non-tendered players (arbitration) now feed it, though it still drains over the long run."
       />
 
       <div className="flex gap-1 mb-3">

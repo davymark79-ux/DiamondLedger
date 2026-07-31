@@ -66,6 +66,7 @@ import { assignMissingContracts } from '../engine/contracts.js';
 import { advanceServiceTime } from '../engine/serviceTime.js';
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
+import { runMinorLeagueFreeAgencySweep, advanceMinorLeagueFreeAgentPool } from '../engine/minorLeagueFreeAgency.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
@@ -75,7 +76,10 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v19: "The 50-man
+// Bumped whenever the persisted state's SHAPE changes (v20: "The 50-man
+// Roster System" arc's Phase 9 adds a persisted
+// `minorLeagueFreeAgentPoolById` + `playerRightsResult`, plus
+// consecutiveSeasonsWithOrg/lastOrgTeamId on every serviceRecord. v19: "The 50-man
 // Roster System" arc's Phase 8 adds a persisted `rule5Result` field AND a
 // new `rule5` key on every player's serviceRecord — a v18 save has
 // neither, and per the v17 note below, a missing field read as `undefined`
@@ -101,7 +105,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 19;
+export const STATE_SCHEMA_VERSION = 20;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -463,6 +467,10 @@ export function computeFreshSeason1State() {
     // Same "nothing to evaluate yet" shape: Rule 5 exposure needs several
     // accrued minor-league seasons, and season 1 credits the first one.
     rule5Result: { selections: [], stuck: [], returned: [] },
+    // Same "nothing to evaluate yet" shape: minor-league free agency needs
+    // 7 accrued minor-league seasons, and season 1 credits the first.
+    playerRightsResult: { minorLeagueFreeAgents: [], minorLeagueFreeAgentsEligible: 0, minorLeagueFreeAgentsRetired: 0 },
+    minorLeagueFreeAgentPoolById: new Map(),
     playoffResult,
     seasonResult,
     weekPlan,
@@ -786,6 +794,25 @@ export function advanceToNextSeason(state) {
   );
   const rule5Result = { selections: rule5Draft.selections, stuck: rule5Obligations.stuck, returned: rule5Obligations.returned };
 
+  // 50-man Roster System, Phase 9 — runs AFTER the Rule 5 draft above on
+  // purpose: a player just taken in Rule 5 is now protected
+  // (wasEverProtected), so he's correctly no longer eligible to walk as a
+  // minor-league free agent in the same offseason.
+  const teamsByIdForRights = new Map(teamsForNextSeason.map((t) => [t.id, t]));
+  const minorLeagueFreeAgency = runMinorLeagueFreeAgencySweep(
+    state.affiliateRosterByClubId,
+    state.minorLeagueFreeAgentPoolById,
+    teamsByIdForRights,
+    rng,
+    asOfDate
+  );
+  const minorLeagueFaRetirements = advanceMinorLeagueFreeAgentPool(state.minorLeagueFreeAgentPoolById, rng, asOfDate);
+  const playerRightsResult = {
+    minorLeagueFreeAgents: minorLeagueFreeAgency.departed,
+    minorLeagueFreeAgentsEligible: minorLeagueFreeAgency.eligibleCount,
+    minorLeagueFreeAgentsRetired: minorLeagueFaRetirements.retired,
+  };
+
   const arbitrationResult = runArbitrationAndTenderSweep(
     rosterByTeamId,
     state.establishedFreeAgentPoolById,
@@ -800,6 +827,8 @@ export function advanceToNextSeason(state) {
     asOfDate,
     arbitrationResult,
     rule5Result,
+    playerRightsResult,
+    minorLeagueFreeAgentPoolById: state.minorLeagueFreeAgentPoolById,
     rosterByTeamId,
     managerByTeamId,
     roleStateById: state.roleStateById,

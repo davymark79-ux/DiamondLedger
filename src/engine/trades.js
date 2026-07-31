@@ -40,7 +40,8 @@
 //   explicit Taxi Squad is "designated at the start of the season, not on
 //   the fly."
 
-import { removeFromRoster, addToRoster } from './minorLeagues.js';
+import { removeFromRoster, addToRoster, playerQualityScore } from './minorLeagues.js';
+import { isTenAndFiveEligible } from './serviceTime.js';
 import { RATING_SCALE } from '../models/constants.js';
 
 const ROSTER_SECTIONS = ['lineup', 'rotation', 'bullpen', 'bench'];
@@ -58,10 +59,46 @@ const RESERVE_ELIGIBLE_LEVELS = ['AAA', 'AA'];
 export const MEDICAL_REVIEW_BASE_RATE = 0.05; // at max Durability (80)
 export const MEDICAL_REVIEW_MAX_RATE = 0.1; // at min Durability (20)
 
+// 10-and-5 rights ("50-man Roster System" arc, Phase 9), per
+// player-movement.md: a player with 10 years of total MLB service, the
+// last 5 consecutive with the same club, "cannot be traded without his
+// consent." Modeled as a real consent roll rather than a hard block —
+// confirmed with the user, and truer to life: real 10-and-5 veterans
+// frequently DO waive when the move suits them, so a flat veto would
+// remove every veteran from the trade market permanently and never
+// produce an interesting decision.
+//
+// Consent is weighted by whether the acquiring club is actually better,
+// using a signal already in scope (both clubs' active rosters are already
+// passed to executeTrade) rather than new plumbing. CBA-negotiable
+// placeholders, same tuning status as every other constant here.
+export const NO_TRADE_BASE_CONSENT = 0.5;
+export const NO_TRADE_QUALITY_SCALE = 0.03; // per point of roster-quality difference
+
 function medicalReviewFailureProbability(player) {
   const durability = player.ratings?.durability?.current ?? RATING_SCALE.AVERAGE;
   const fragility = 1 - (durability - RATING_SCALE.MIN) / (RATING_SCALE.MAX - RATING_SCALE.MIN);
   return MEDICAL_REVIEW_BASE_RATE + fragility * (MEDICAL_REVIEW_MAX_RATE - MEDICAL_REVIEW_BASE_RATE);
+}
+
+/** Average current ability of a club's active roster — the "is this a better club?" signal. */
+function rosterStrength(roster) {
+  const players = ROSTER_SECTIONS.flatMap((k) => roster?.[k] ?? []);
+  if (players.length === 0) return 0;
+  return players.reduce((sum, p) => sum + playerQualityScore(p), 0) / players.length;
+}
+
+/**
+ * A 10-and-5 player's probability of consenting to a trade. Rises when the
+ * acquiring club is stronger than his current one and falls when it's
+ * weaker — the whole point of the right is that HE gets to weigh the move.
+ * @param {object} fromRoster - his current club's active roster
+ * @param {object} toRoster - the acquiring club's active roster
+ * @returns {number} clamped to [0, 1]
+ */
+export function computeNoTradeConsentProbability(fromRoster, toRoster) {
+  const delta = rosterStrength(toRoster) - rosterStrength(fromRoster);
+  return Math.min(1, Math.max(0, NO_TRADE_BASE_CONSENT + delta * NO_TRADE_QUALITY_SCALE));
 }
 
 /**
@@ -170,6 +207,22 @@ export function executeTrade(
     const loc = locatePlayer(teamBId, playerId, rosterByTeamId, reserveRosterByTeamId, taxiRosterByTeamId, affiliateRosterByClubId);
     if (!loc) return null;
     located.push({ ...loc, fromTeamId: teamBId, toTeamId: teamAId });
+  }
+
+  // 10-and-5 rights ("50-man Roster System" arc, Phase 9) — checked BEFORE
+  // the medical review, and like it, before any map is cloned: a veteran
+  // who won't waive kills the deal outright. This is the first real
+  // consumer of engine/serviceTime.js's isTenAndFiveEligible, whose
+  // `consecutiveYearsWithCurrentOrg` argument Phase 4 left as an unbuilt
+  // external param — Phase 9's serviceRecord.consecutiveSeasonsWithOrg is
+  // what finally makes it real.
+  for (const loc of located) {
+    const record = loc.player.serviceRecord;
+    if (!record || !isTenAndFiveEligible(record, record.consecutiveSeasonsWithOrg ?? 0)) continue;
+    const consent = computeNoTradeConsentProbability(rosterByTeamId.get(loc.fromTeamId), rosterByTeamId.get(loc.toTeamId));
+    if (rng() >= consent) {
+      return { outcome: 'NO_TRADE_REFUSED', refusingPlayerId: loc.player.id, consentProbability: consent };
+    }
   }
 
   const medicalReview = evaluatePostTradeMedicalReview(

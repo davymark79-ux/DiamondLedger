@@ -233,7 +233,7 @@ console.log('\n=== 6. Real integration: no roster or affiliate section ever drai
   for (const [, roster] of s.rosterByTeamId) for (const k of SECTIONS) activeTotal += roster[k].length;
   assert(activeTotal === 1300, `all 50 clubs still carry exactly 26 active players (got ${activeTotal}) — every pick displaced exactly one incumbent`);
 
-  assert(s.schemaVersion === 19, `schemaVersion is the current STATE_SCHEMA_VERSION, 19 (got ${s.schemaVersion})`);
+  assert(s.schemaVersion === 20, `schemaVersion is the current STATE_SCHEMA_VERSION, 20 (got ${s.schemaVersion})`);
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

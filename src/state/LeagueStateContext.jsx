@@ -32,9 +32,14 @@ import {
 } from '../engine/optionsWaiversDfa.js';
 import { executeTrade as executeTradeEngine } from '../engine/trades.js';
 import { computeCombinedReverseStandingsOrder } from '../engine/draft.js';
-import { computeServiceYears, isFreeAgencyEligible, isArbitrationEligible } from '../engine/serviceTime.js';
+import { computeServiceYears, isFreeAgencyEligible, isArbitrationEligible, isTenAndFiveEligible } from '../engine/serviceTime.js';
 
 const LeagueStateContext = createContext(null);
+
+// Hundreds of players can reach minor-league free agency in one offseason
+// (measured: ~470-660/season at steady state), so the wire shows a sample
+// plus a count rather than burying every other event type.
+const LEAGUE_WIRE_MILB_FA_LIMIT = 15;
 
 // A trivial, side-effect-free "replace state" reducer — safe under React 18
 // StrictMode's dev-mode double-invocation of reducer functions (same
@@ -369,6 +374,26 @@ export function LeagueStateProvider({ children }) {
     return [...state.establishedFreeAgentPoolById.values()];
   }
 
+  // "50-man Roster System" arc, Phase 9 (engine/minorLeagueFreeAgency.js) —
+  // its own pool, deliberately separate from the three above: a career
+  // minor leaguer who walked on his own is a genuinely distinct population
+  // from a young amateur washout or an established MLB free agent (§28's
+  // own reasoning for keeping College and International separate).
+  function getMinorLeagueFreeAgents() {
+    return [...(state.minorLeagueFreeAgentPoolById?.values() ?? [])];
+  }
+
+  function getPlayerRightsResult() {
+    return state.playerRightsResult ?? { minorLeagueFreeAgents: [], minorLeagueFreeAgentsEligible: 0, minorLeagueFreeAgentsRetired: 0 };
+  }
+
+  // Whether an active-roster player has full 10-and-5 no-trade protection.
+  function getPlayerTenAndFive(playerId) {
+    const record = playersById.get(playerId)?.serviceRecord;
+    if (!record) return false;
+    return isTenAndFiveEligible(record, record.consecutiveSeasonsWithOrg ?? 0);
+  }
+
   // Signs a College or International free agent onto teamId's affiliate
   // system (engine/freeAgency.js's signAmateurFreeAgent, shared by both
   // pools). Guarded by isSimulating — a season advance takes several real
@@ -378,6 +403,20 @@ export function LeagueStateProvider({ children }) {
   async function signCollegeFreeAgent(playerId, teamId) {
     if (isSimulating) return null;
     const result = signAmateurFreeAgentEngine(playerId, teamId, state.freeAgentPoolById, state.affiliateRosterByClubId);
+    if (!result) return null;
+    const next = { ...state };
+    dispatch({ type: 'REPLACE', payload: next });
+    await saveState(next);
+    return result;
+  }
+
+  // Signs a minor-league free agent onto teamId's affiliate system. Reuses
+  // signAmateurFreeAgent exactly like the College/International pools do —
+  // an affiliate placement by quality is the right destination for a
+  // career minor leaguer, unlike the established pool's straight-to-MLB path.
+  async function signMinorLeagueFreeAgent(playerId, teamId) {
+    if (isSimulating) return null;
+    const result = signAmateurFreeAgentEngine(playerId, teamId, state.minorLeagueFreeAgentPoolById, state.affiliateRosterByClubId);
     if (!result) return null;
     const next = { ...state };
     dispatch({ type: 'REPLACE', payload: next });
@@ -596,6 +635,31 @@ export function LeagueStateProvider({ children }) {
       });
     }
 
+    // "50-man Roster System" arc, Phase 9 — another offseason event, filed
+    // at Season Start with the rest. Capped: hundreds can walk in a single
+    // offseason, and a wire listing every one would drown out everything
+    // else on this page.
+    const milbFreeAgents = state.playerRightsResult?.minorLeagueFreeAgents ?? [];
+    for (const m of milbFreeAgents.slice(0, LEAGUE_WIRE_MILB_FA_LIMIT)) {
+      const former = teamsById.get(m.formerTeamId);
+      events.push({
+        id: `milbfa-${m.playerId}-${state.seasonNumber}`,
+        type: 'minorLeagueFA',
+        gameNumber: -1,
+        team: former ? `${former.city} ${former.nickname}` : '—',
+        detail: `${m.firstName} ${m.lastName} (${m.primaryPosition}) reached minor-league free agency out of ${m.fromLevel} and left the organization.`,
+      });
+    }
+    if (milbFreeAgents.length > LEAGUE_WIRE_MILB_FA_LIMIT) {
+      events.push({
+        id: `milbfa-more-${state.seasonNumber}`,
+        type: 'minorLeagueFA',
+        gameNumber: -1,
+        team: '—',
+        detail: `…and ${milbFreeAgents.length - LEAGUE_WIRE_MILB_FA_LIMIT} more minor-league free agents left their organizations this offseason.`,
+      });
+    }
+
     // Promotion/relegation happened at the boundary entering THIS season,
     // before its first game — sorts as the oldest event in the feed
     // (gameNumber -1, before any real in-season game's 0-based numbering).
@@ -700,6 +764,10 @@ export function LeagueStateProvider({ children }) {
     getCollegeFreeAgents,
     getInternationalFreeAgents,
     getEstablishedFreeAgents,
+    getMinorLeagueFreeAgents,
+    getPlayerRightsResult,
+    getPlayerTenAndFive,
+    signMinorLeagueFreeAgent,
     signCollegeFreeAgent,
     signInternationalFreeAgent,
     signEstablishedFreeAgent,
