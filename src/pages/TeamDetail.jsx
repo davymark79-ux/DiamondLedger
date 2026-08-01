@@ -126,6 +126,24 @@ function TenAndFiveTag({ playerId }) {
   );
 }
 
+// "50-man Roster System" arc, Phase 10 (engine/rehabAssignment.js) — a
+// recently-activated player still shaking off return rust. Same quiet,
+// conditional convention as the tags above, and deliberately distinct from
+// InjuryTag: this player is AVAILABLE, just not yet himself.
+function RustTag({ playerId }) {
+  const { getPlayerRustStatus } = useLeagueState();
+  const rust = getPlayerRustStatus(playerId);
+  if (!rust) return null;
+  return (
+    <span
+      className="ml-1.5 text-[10px] text-navy/80 whitespace-nowrap"
+      title={`Recently activated off the injured list — still shaking off ${rust.gamesRemaining} game${rust.gamesRemaining === 1 ? '' : 's'} of rust`}
+    >
+      Rust · {rust.gamesRemaining}g
+    </span>
+  );
+}
+
 // international-tournament-and-nationality.md — purely cosmetic flavor
 // data, never affects any sim outcome. Quiet by design: a plain-USA,
 // no-heritage player (the common case) renders nothing at all; anyone
@@ -231,6 +249,7 @@ function PositionPlayerRow({ player, teamId, onAction }) {
         <ServiceTag playerId={player.id} />
         <Rule5Tag playerId={player.id} />
         <TenAndFiveTag playerId={player.id} />
+        <RustTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{player.primaryPosition}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>
@@ -282,6 +301,7 @@ function PitcherRow({ player, role, teamId, onAction }) {
         <ServiceTag playerId={player.id} />
         <Rule5Tag playerId={player.id} />
         <TenAndFiveTag playerId={player.id} />
+        <RustTag playerId={player.id} />
       </span>
       <span className="text-right agate text-ledger/70">{role}</span>
       <span className="text-right agate text-ledger/70">{getAge(player)}</span>

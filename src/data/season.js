@@ -76,7 +76,11 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // one-time best-effort cleanup of any orphaned entry left over from before
 // this migration. Not read from anymore; nothing migrates its contents.
 export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
-// Bumped whenever the persisted state's SHAPE changes (v20: "The 50-man
+// Bumped whenever the persisted state's SHAPE changes (v21: "The 50-man
+// Roster System" arc's Phase 10 — the FINAL phase — adds
+// rustStatusById/rehabStintsStarted/rehabActivations inside seasonResult
+// (engine/rehabAssignment.js), which a v20 save's seasonResult lacks
+// entirely. v20: "The 50-man
 // Roster System" arc's Phase 9 adds a persisted
 // `minorLeagueFreeAgentPoolById` + `playerRightsResult`, plus
 // consecutiveSeasonsWithOrg/lastOrgTeamId on every serviceRecord. v19: "The 50-man
@@ -105,7 +109,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 20;
+export const STATE_SCHEMA_VERSION = 21;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff

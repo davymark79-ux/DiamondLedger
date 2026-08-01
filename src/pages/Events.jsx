@@ -7,7 +7,7 @@ import { useLeagueState } from '../state/LeagueStateContext.jsx';
 // categories had no underlying system at all (the design doc's Scripted
 // Event framework was never built, see CLAUDE.md). Dropped rather than
 // kept as dead filter options.
-const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation', 'arbitration', 'nonTender', 'rule5', 'minorLeagueFA'];
+const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation', 'arbitration', 'nonTender', 'rule5', 'minorLeagueFA', 'rehab'];
 
 // 'nonTender' is the one type whose camelCase id doesn't read well under
 // the filter buttons' `capitalize` class — everything else is a single

@@ -545,6 +545,13 @@ export function simulateSeasonWithCup(
     standingsById: seasonState.standingsById,
     injuryStatusById: seasonState.injuryStatusById,
     consecutiveGamesPlayedById: seasonState.consecutiveGamesPlayedById,
+    // "50-man Roster System" arc, Phase 10 (engine/rehabAssignment.js) —
+    // this is the return path data/season.js actually persists, so without
+    // these three the rehab data would exist during simulation and then
+    // silently vanish (exactly the `cupState` gap §33 had to fix).
+    rustStatusById: seasonState.rustStatusById,
+    rehabStintsStarted: seasonState.rehabStintsStarted,
+    rehabActivations: seasonState.rehabActivations,
     streakStateById: seasonState.streakStateById,
     managerAssignmentById: seasonState.managerAssignmentById,
     firings: seasonState.firings,

@@ -40,6 +40,8 @@ const LeagueStateContext = createContext(null);
 // (measured: ~470-660/season at steady state), so the wire shows a sample
 // plus a count rather than burying every other event type.
 const LEAGUE_WIRE_MILB_FA_LIMIT = 15;
+// Around 110 rehab activations happen in a real season — same reasoning.
+const LEAGUE_WIRE_REHAB_LIMIT = 15;
 
 // A trivial, side-effect-free "replace state" reducer — safe under React 18
 // StrictMode's dev-mode double-invocation of reducer functions (same
@@ -542,6 +544,23 @@ export function LeagueStateProvider({ children }) {
   // Whether an active-roster player is still serving a Rule 5 obligation —
   // drives TeamDetail.jsx's "R5" tag and explains why his Option button is
   // unavailable (engine/optionsWaiversDfa.js refuses to option him).
+  // "50-man Roster System" arc, Phase 10 (engine/rehabAssignment.js) — how
+  // much return-rust a player is still carrying as of the end of the
+  // current live season, or null if he's sharp. Same "read the season's own
+  // accumulator" shape as getPlayerInjuryStatus/getPlayerFatigueStatus.
+  function getPlayerRustStatus(playerId) {
+    return state.seasonResult.rustStatusById?.get(playerId) ?? null;
+  }
+
+  // This season's rehab stints — who was sent out and how each return
+  // resolved. Season-scoped, like the injury/firing logs.
+  function getRehabActivity() {
+    return {
+      started: state.seasonResult.rehabStintsStarted ?? [],
+      activated: state.seasonResult.rehabActivations ?? [],
+    };
+  }
+
   function getPlayerRule5Status(playerId) {
     return playersById.get(playerId)?.serviceRecord?.rule5 ?? null;
   }
@@ -660,6 +679,26 @@ export function LeagueStateProvider({ children }) {
       });
     }
 
+    // "50-man Roster System" arc, Phase 10 — rehab activations are real
+    // in-season events, so unlike the offseason entries above they carry
+    // their actual game number. Capped for the same reason as Phase 9's.
+    const rehabActivations = state.seasonResult.rehabActivations ?? [];
+    for (const a of rehabActivations.slice(0, LEAGUE_WIRE_REHAB_LIMIT)) {
+      const player = playersById.get(a.playerId);
+      const team = player ? teamsById.get(player.teamId) : null;
+      const rustGames = `${a.rustGamesCarried} game${a.rustGamesCarried === 1 ? '' : 's'} of rust`;
+      const detail = a.rehabGamesServed > 0
+        ? `${a.firstName} ${a.lastName} (${a.primaryPosition}) was activated after a ${a.rehabGamesServed}-game rehab assignment${a.rustGamesCarried > 0 ? `, still shaking off ${rustGames}` : ' and came back sharp'}.`
+        : `${a.firstName} ${a.lastName} (${a.primaryPosition}) was activated straight off the injured list with no rehab stint — carrying ${rustGames}.`;
+      events.push({
+        id: `rehab-${a.playerId}-${a.gameNumber}`,
+        type: 'rehab',
+        gameNumber: a.gameNumber,
+        team: team ? `${team.city} ${team.nickname}` : '—',
+        detail,
+      });
+    }
+
     // Promotion/relegation happened at the boundary entering THIS season,
     // before its first game — sorts as the oldest event in the feed
     // (gameNumber -1, before any real in-season game's 0-based numbering).
@@ -747,6 +786,8 @@ export function LeagueStateProvider({ children }) {
     getArbitrationResult,
     getRule5Result,
     getPlayerRule5Status,
+    getPlayerRustStatus,
+    getRehabActivity,
     getLeagueWireEvents,
     buildMatchup,
     getAffiliateClub,

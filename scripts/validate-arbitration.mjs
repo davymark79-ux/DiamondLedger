@@ -244,7 +244,7 @@ console.log('\n=== 6. Real integration: a genuine multi-season save ===\n');
   const bothWinners = new Set(s.arbitrationResult.hearings.map((h) => h.winner));
   assert(bothWinners.size === 2, `both sides genuinely win real hearings in a single offseason (got ${[...bothWinners].join(', ')})`);
 
-  assert(s.schemaVersion === 20, `schemaVersion is the current STATE_SCHEMA_VERSION, 20 (got ${s.schemaVersion})`);
+  assert(s.schemaVersion === 21, `schemaVersion is the current STATE_SCHEMA_VERSION, 21 (got ${s.schemaVersion})`);
 
   // CLAUDE.md §28 flagged establishedFreeAgentPoolById as closed-loop and
   // shrinking (130 -> 16 over 15 seasons with zero signings). Non-tenders

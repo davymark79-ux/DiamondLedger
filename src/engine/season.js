@@ -16,6 +16,7 @@ import { computePitcherDecisions } from './pitcherDecisions.js';
 import { maybeEscalateInjury } from './injuries.js';
 import { updateStreakState } from './hotColdStreaks.js';
 import { rollRest, applyShuttleFatigue } from './positionPlayerFatigue.js';
+import { advanceRehabAndRust, applyFullRustOnReturn, advanceRust } from './rehabAssignment.js';
 import { computeWinPct, updateOwnerPatience, rollFiring, HONEYMOON_PATIENCE, OWNER_PATIENCE_NEUTRAL } from './managerFiring.js';
 import { createManager } from '../models/Manager.js';
 import { generateManager } from '../models/generation/managerGenerator.js';
@@ -128,7 +129,7 @@ function positionPlayersInGame(roster, dhRule) {
 // /box-score matchup builder needs exactly this same "roster -> game side"
 // construction (DH-aware lineup, manager/streak/fatigue wiring), not a
 // second copy of it.
-export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById) {
+export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById, rustStatusById = new Map()) {
   const fieldPlayers = positionPlayersInGame(roster, dhRule);
   const lineup = dhRule ? fieldPlayers : [...fieldPlayers, startingPitcher];
   // dhRule/managerProfile/streakStateById all ride along on the side object
@@ -136,7 +137,7 @@ export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesP
   // managers.md's sliders, the streak-aware pinch-hit factor) need to know
   // which league/manager/recent-form a side carries, same "attach it to the
   // side object" pattern already established for consecutiveGamesPlayedById.
-  return { lineup, startingPitcher, bullpen: roster.bullpen, bench: roster.bench, consecutiveGamesPlayedById, dhRule, managerProfile, streakStateById };
+  return { lineup, startingPitcher, bullpen: roster.bullpen, bench: roster.bench, consecutiveGamesPlayedById, dhRule, managerProfile, streakStateById, rustStatusById };
 }
 
 function isAvailable(player, injuryStatusById) {
@@ -236,13 +237,24 @@ function teamPlayerIds(roster) {
 // the countdown decrement. Deletes the entry once fully healed
 // (gamesRemaining <= 0) so "available" can simply mean "absent from the
 // map" everywhere else (isAvailable, resolveAvailableRoster).
-function advanceInjuriesForTeam(roster, injuryStatusById, rng) {
+// "50-man Roster System" arc, Phase 10 — `rustStatusById` is optional so
+// every existing caller (validate scripts, the offline Hall-of-Fame
+// pipeline) is unaffected: with no Map passed, nobody ever accrues rust and
+// behaviour is byte-identical to before that phase.
+function advanceInjuriesForTeam(roster, injuryStatusById, rng, rehabStatusById = null, rustStatusById = null) {
   for (const playerId of teamPlayerIds(roster)) {
     const injury = injuryStatusById.get(playerId);
     if (!injury || injury.gamesRemaining <= 0) continue;
     const updated = maybeEscalateInjury(injury, rng);
-    if (updated.gamesRemaining <= 0) injuryStatusById.delete(playerId);
-    else injuryStatusById.set(playerId, updated);
+    if (updated.gamesRemaining <= 0) {
+      injuryStatusById.delete(playerId);
+      // He just healed. If he never got out for live reps, he carries the
+      // FULL rust penalty — advanceRehabAndRust below handles the reduced
+      // case for anyone who did serve a stint.
+      if (rustStatusById && !rehabStatusById?.has(playerId)) {
+        applyFullRustOnReturn(playerId, updated.severity, rustStatusById);
+      }
+    } else injuryStatusById.set(playerId, updated);
   }
 }
 
@@ -431,6 +443,12 @@ export function createSeasonState(teams, getTeamManager = () => null) {
   const standingsById = new Map(teams.map((team) => [team.id, { wins: 0, losses: 0 }]));
   const rotationIndexById = new Map(teams.map((team) => [team.id, 0]));
   const injuryStatusById = new Map();
+  // "50-man Roster System" arc, Phase 10 — same external-accumulator
+  // ownership pattern as injuryStatusById itself.
+  const rehabStatusById = new Map();
+  const rustStatusById = new Map();
+  const rehabStintsStarted = [];
+  const rehabActivations = [];
   const consecutiveGamesPlayedById = new Map();
   const streakAccumulatorById = new Map();
   const streakStateById = new Map();
@@ -461,6 +479,7 @@ export function createSeasonState(teams, getTeamManager = () => null) {
 
   return {
     standingsById, rotationIndexById, injuryStatusById, consecutiveGamesPlayedById,
+    rehabStatusById, rustStatusById, rehabStintsStarted, rehabActivations,
     streakAccumulatorById, streakStateById, seasonBattingStatsById, seasonPitchingStatsById, results,
     managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById,
   };
@@ -525,6 +544,12 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
   const teamsById = new Map(teams.map((team) => [team.id, team]));
   const {
     standingsById, injuryStatusById, consecutiveGamesPlayedById,
+    // "50-man Roster System" arc, Phase 10. Defaulted rather than assumed
+    // present: engine/ledgerCup.js and the offline Hall-of-Fame pipeline
+    // both build season states through createSeasonState, but a hand-built
+    // fixture in a validate script may not carry these.
+    rehabStatusById = new Map(), rustStatusById = new Map(),
+    rehabStintsStarted = [], rehabActivations = [],
     streakAccumulatorById, streakStateById, seasonBattingStatsById, seasonPitchingStatsById, results,
     managerAssignmentById, tenureRecordById, ownerPatienceById, availableManagerPool, firings, managerNameById,
   } = seasonState;
@@ -548,8 +573,19 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
 
     const awayFullRoster = getTeamRoster(game.awayTeamId);
     const homeFullRoster = getTeamRoster(game.homeTeamId);
-    advanceInjuriesForTeam(awayFullRoster, injuryStatusById, rng);
-    advanceInjuriesForTeam(homeFullRoster, injuryStatusById, rng);
+    advanceInjuriesForTeam(awayFullRoster, injuryStatusById, rng, rehabStatusById, rustStatusById);
+    advanceInjuriesForTeam(homeFullRoster, injuryStatusById, rng, rehabStatusById, rustStatusById);
+
+    // "50-man Roster System" arc, Phase 10 — rehab stints start/advance and
+    // resolve into (reduced) rust, then every active rust counter ticks
+    // down. Runs right after injuries advance so an injury that just
+    // cleared is seen as cleared this same game.
+    for (const roster of [awayFullRoster, homeFullRoster]) {
+      const { started, activated } = advanceRehabAndRust(roster, injuryStatusById, rehabStatusById, rustStatusById, rng);
+      for (const s of started) rehabStintsStarted.push({ ...s, gameNumber: results.length });
+      for (const a of activated) rehabActivations.push({ ...a, gameNumber: results.length });
+    }
+    advanceRust(rustStatusById);
 
     // `?? undefined` — a null manager (no real one assigned) must become
     // undefined, not null, to actually trigger buildGameSide/createSide's/
@@ -574,8 +610,8 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
 
     const box = simulateGame(
       {
-        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById),
-        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById),
+        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById, rustStatusById),
+        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById, rustStatusById),
       },
       { rng }
     );
@@ -676,6 +712,10 @@ export function simulateSeason(teams, getTeamRoster, schedule, rng, getTeamManag
     standingsById: seasonState.standingsById,
     injuryStatusById: seasonState.injuryStatusById,
     consecutiveGamesPlayedById: seasonState.consecutiveGamesPlayedById,
+    // "50-man Roster System" arc, Phase 10 (engine/rehabAssignment.js).
+    rustStatusById: seasonState.rustStatusById,
+    rehabStintsStarted: seasonState.rehabStintsStarted,
+    rehabActivations: seasonState.rehabActivations,
     streakStateById: seasonState.streakStateById,
     managerAssignmentById: seasonState.managerAssignmentById,
     firings: seasonState.firings,

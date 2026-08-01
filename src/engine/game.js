@@ -22,6 +22,7 @@ import {
 import { computeInjuryRisk, rollInjury } from './injuries.js';
 import { applyGamePerformance, applyPitcherGamePerformance } from './consistency.js';
 import { applyFatigue } from './positionPlayerFatigue.js';
+import { applyReturnRust } from './rehabAssignment.js';
 import { identifyStealOpportunity, computeStealAttemptProbability, computeStealSuccessRate } from './stolenBases.js';
 import { identifyBuntSituation, computeBuntAttemptProbability, computeBuntSuccessRate } from './bunting.js';
 import { computeTeamDefenseComposite, isNoDoublesActive, isInfieldInActive, computeErrorChance } from './fielding.js';
@@ -49,19 +50,32 @@ function createSide(
     dhRule = true,
     managerProfile = createManager(),
     streakStateById = new Map(),
+    // "50-man Roster System" arc, Phase 10 — empty-Map default, same
+    // unbiased-default precedent as consecutiveGamesPlayedById above, so
+    // every caller that doesn't supply it sees byte-identical behaviour.
+    rustStatusById = new Map(),
   },
   rng
 ) {
   const formAdjustedLineup = lineup.map((player) => {
     const withForm = applyGamePerformance(player, rng);
-    return applyFatigue(withForm, consecutiveGamesPlayedById.get(player.id) ?? 0);
+    const withFatigue = applyFatigue(withForm, consecutiveGamesPlayedById.get(player.id) ?? 0);
+    // Return rust layers on top of form and fatigue, exactly where fatigue
+    // itself sits — a recently-activated player is off his game until he
+    // shakes it off (engine/rehabAssignment.js).
+    const rust = rustStatusById.get(player.id);
+    return rust ? applyReturnRust(withFatigue, rust.gamesRemaining, rust.gamesTotal) : withFatigue;
   });
   const battingLines = new Map();
   for (const player of formAdjustedLineup) {
     battingLines.set(player.id, createBattingLine(player));
   }
 
-  const formAdjustedStarter = applyPitcherGamePerformance(startingPitcher, rng);
+  const starterRust = rustStatusById.get(startingPitcher.id);
+  const rustedStarter = starterRust
+    ? applyReturnRust(startingPitcher, starterRust.gamesRemaining, starterRust.gamesTotal)
+    : startingPitcher;
+  const formAdjustedStarter = applyPitcherGamePerformance(rustedStarter, rng);
   const pitchingLines = new Map();
   pitchingLines.set(formAdjustedStarter.id, createPitchingLine(formAdjustedStarter, { entryInning: 1, entryLeadMargin: 0 }));
 
