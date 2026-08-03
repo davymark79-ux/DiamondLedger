@@ -37,6 +37,7 @@
 import { playerQualityScore, sectionKeyForPosition, removeFromRoster, addToRoster } from './minorLeagues.js';
 import { candidatesForSigning } from './freeAgency.js';
 import { isOutrightRefusalEligible } from './serviceTime.js';
+import { rollRetirement } from './retirement.js';
 import { DEVELOPMENT_LEVELS } from '../models/constants.js';
 
 const ROSTER_SECTIONS = ['lineup', 'rotation', 'bullpen', 'bench'];
@@ -166,15 +167,28 @@ export function optionPlayerToMinors(playerId, teamId, rosterByTeamId, affiliate
  * @param {Map<string, object>} affiliateRosterByClubId
  * @param {string[]} waiverPriorityOrder
  * @param {Map<string, object>} establishedFreeAgentPoolById
+ * @param {object} [options] - appended as a trailing options object rather
+ *   than new positional params, so every existing call site is unaffected
+ *   (the signature-change lesson from CLAUDE.md §35).
+ * @param {() => number} [options.rng] - defaults to Math.random, matching
+ *   engine/trades.js's executeTrade: a one-off, human-triggered action has
+ *   no seeded season rng available the way simulation does. Pass a fixed
+ *   rng from tests.
+ * @param {Date} [options.asOfDate] - in-game date for the retirement age
+ *   check; callers should pass state.asOfDate, not wall-clock (the same
+ *   threading signEstablishedFreeAgent already established).
  * @returns {{
- *   outcome: 'CLAIMED'|'OUTRIGHT_ASSIGNED'|'REFUSED_FREE_AGENCY',
+ *   outcome: 'CLAIMED'|'OUTRIGHT_ASSIGNED'|'REFUSED_FREE_AGENCY'|'RETIRED'|'RETURNED_TO_ORIGINAL_CLUB',
  *   claimingTeamId?: string,
+ *   retiredFrom?: 'OUTRIGHT_ASSIGNED'|'REFUSED_FREE_AGENCY',
  *   updatedRosterByTeamId: Map<string, object>,
  *   affiliateRosterByClubId: Map<string, object>,
  *   establishedFreeAgentPoolById: Map<string, object>,
  * }|null} null if the player isn't on teamId's active roster
  */
-export function designateForAssignment(playerId, teamId, rosterByTeamId, affiliateRosterByClubId, waiverPriorityOrder, establishedFreeAgentPoolById) {
+export function designateForAssignment(playerId, teamId, rosterByTeamId, affiliateRosterByClubId, waiverPriorityOrder, establishedFreeAgentPoolById, options = {}) {
+  const rng = options.rng ?? Math.random;
+  const asOfDate = options.asOfDate ?? new Date();
   const roster = rosterByTeamId.get(teamId);
   if (!roster) return null;
   const found = findOnRoster(roster, playerId);
@@ -230,7 +244,30 @@ export function designateForAssignment(playerId, teamId, rosterByTeamId, affilia
   // Unclaimed — subject to outright-refusal rights (Phase 4's
   // isOutrightRefusalEligible, getting a real wasOutrightedBefore input
   // for the first time here).
-  if (isOutrightRefusalEligible(player.serviceRecord, player.serviceRecord.wasOutrightedBefore)) {
+  const refusesAssignment = isOutrightRefusalEligible(player.serviceRecord, player.serviceRecord.wasOutrightedBefore);
+  const wouldBeOutcome = refusesAssignment ? 'REFUSED_FREE_AGENCY' : 'OUTRIGHT_ASSIGNED';
+
+  // DFA'd-and-not-picked-up retirement — engine/retirement.js's trigger 3,
+  // a named extension point in that file since the day it was written and
+  // unblocked only once the 50-man arc shipped DFA/waivers for real. The
+  // roll REPLACES the landing spot rather than following it: a player who
+  // calls it a career here is not also outright-assigned to AAA or added
+  // to the free-agent pool, so no Map gains him. Note this can only ever
+  // reduce roster pressure, never cause the depletion class of bug
+  // CLAUDE.md §34/§40 hit — a DFA already removes him from the active
+  // roster with no backfill either way (§38's own accepted tolerance);
+  // retiring just means he doesn't land anywhere afterward.
+  if (rollRetirement(player, rng, { asOfDate, dfaOutcome: wouldBeOutcome })) {
+    return {
+      outcome: 'RETIRED',
+      retiredFrom: wouldBeOutcome,
+      updatedRosterByTeamId: rosterByTeamIdAfterRemoval,
+      affiliateRosterByClubId,
+      establishedFreeAgentPoolById,
+    };
+  }
+
+  if (refusesAssignment) {
     const updatedPool = new Map(establishedFreeAgentPoolById);
     updatedPool.set(playerId, { ...player, teamId: null });
     return {

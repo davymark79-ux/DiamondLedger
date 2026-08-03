@@ -27,22 +27,57 @@
 //    term ("an older player who maybe planned to retire at season's end
 //    gets a season-ending injury and just calls it there" — a young
 //    player with the same injury is expected back, no bump).
-// 3. DFA'd-and-not-picked-up — explicitly DEFERRED, not built here. There
-//    is no DFA/waiver/roster-transaction mechanic anywhere in this
-//    codebase (no trades, no waivers, no roster moves at all). This is a
-//    real, specific extension point for whoever builds that system later
-//    (same "computed hook, not yet acted on" pattern as
-//    reassignmentReaction.js's requestsTrade/benchWorthy flags) — NOT
-//    approximated with a loose proxy here, per explicit direction.
+// 3. DFA'd-and-not-picked-up — BUILT, finally. This sat as a deliberate,
+//    named extension point from the day this file was written ("no DFA/
+//    waiver/roster-transaction mechanic anywhere in this codebase") all
+//    the way through the 50-man Roster System arc, which shipped every
+//    prerequisite it was waiting on: the 50-man pool (CLAUDE.md §34),
+//    real Options/Waivers/DFA (§38), and trades (§39). engine/
+//    optionsWaiversDfa.js's designateForAssignment now passes its
+//    resolved outcome in as `options.dfaOutcome`.
 //
-// Not wired into engine/season.js's simulateSeason(): this app has no
-// season-to-season progression loop at all (simulateSeason() plays one
-// fixed schedule once; growthModel.js/development.js have the same
-// "real, validated, standalone" status today, never called from that
-// loop either). advanceCareerForRoster() below is real and tested,
-// ready for a future season-advancement driver to call at a season
-// boundary — which matches where this mechanic belongs anyway, not
-// mid-game.
+//    Only the two UNCLAIMED outcomes carry a bump, and they carry
+//    DIFFERENT ones — the asymmetry is deliberate and load-bearing:
+//    - CLAIMED isn't passed at all. He WAS picked up; another club wants
+//      him. That's the opposite of the trigger.
+//    - RETURNED_TO_ORIGINAL_CLUB isn't either — a failed Rule 5 pick is a
+//      young prospect going back to his own org (Rule 5 exposure is gated
+//      on 4-5 minor-league seasons), not a career ending.
+//    - OUTRIGHT_ASSIGNED carries the LARGER bump, because it is the only
+//      retirement roll he will EVER get. Verified while building this:
+//      engine/leagueProgression.js's advanceOnePlayer only walks MLB
+//      active rosters, so affiliate players never roll retirement at all,
+//      and an outrighted player can't escape via minor-league free agency
+//      either (engine/serviceTime.js's isMinorLeagueFreeAgent requires
+//      !wasEverProtected, and being outrighted means he was on the 50-man
+//      by definition). Without this, a 38-year-old outrighted to AAA sits
+//      there permanently.
+//    - REFUSED_FREE_AGENCY carries a SMALLER one, for two reasons that
+//      point the same way: he actively chose to keep playing rather than
+//      accept the assignment, and he lands in establishedFreeAgentPoolById,
+//      which engine/freeAgency.js's advanceEstablishedFreeAgentPool
+//      already prunes with this same rollRetirement every season. A
+//      full-size bump here would double-count against a roll that exists.
+//
+//    Gated on the same age threshold as the SEASON_ENDING injury bump
+//    below, and for the same reason: being buried or released is a real
+//    career signal for a veteran and simple adversity for a 26-year-old.
+//    Measured against real simulated state before choosing the gate —
+//    27.2% of active players clear age 33, so this is genuinely reachable
+//    rather than decorative.
+//
+// Not wired into engine/season.js's simulateSeason(), and correctly so —
+// retirement belongs at a season boundary, not mid-schedule. (This
+// paragraph used to say no season-to-season loop existed at all; that
+// stopped being true at CLAUDE.md §20. engine/leagueProgression.js's
+// advanceOnePlayer now calls rollRetirement for real, once per active-
+// roster player per season boundary, and engine/freeAgency.js's
+// advanceEstablishedFreeAgentPool + engine/minorLeagueFreeAgency.js do
+// the same for their own pools.) Worth knowing: those are the ONLY
+// automatic callers — players sitting on an AAA/AA/A/Rookie affiliate
+// roster never roll retirement at all, which is precisely the gap
+// trigger 3's OUTRIGHT_ASSIGNED bump exists to close for the one case
+// this file can actually see.
 
 import { RATING_SCALE, HITTING_ATTRIBUTES, BASERUNNING_ATTRIBUTES, DEFENSE_ATTRIBUTES, PITCHING_ATTRIBUTES, INJURY_SEVERITIES } from '../models/constants.js';
 import { getAge } from '../models/Player.js';
@@ -75,6 +110,23 @@ const RETIREMENT_DECLINE_MAX_BONUS = 0.25;
 // by age within the gate (the gate itself is the age signal).
 const SEASON_ENDING_INJURY_RETIREMENT_BONUS = 0.3;
 
+// DFA'd and nobody picked him up — see trigger 3 in the file header for
+// why these two differ rather than sharing one constant. Flat bumps
+// within the age gate, same shape as the injury bump above. Illustrative
+// placeholders needing real playtesting, like every other numeric
+// constant in this project; the resulting probability curve is printed
+// by validate:ows so the shape is visible rather than implied. Chosen so
+// a just-past-the-gate veteran mostly keeps playing while a genuinely old
+// one mostly doesn't. MEASURED for a player at full potential (i.e. with
+// the decline term at zero), outright-assigned: 0.24 at 33, 0.28 at 36,
+// 0.50 at 39, 0.72 at 42 — with the refusal bump running 0.12 lower
+// throughout. A genuinely declined player adds declineProbabilityBonus
+// on top of those, up to a further +0.25.
+const DFA_RETIREMENT_BONUS_BY_OUTCOME = Object.freeze({
+  OUTRIGHT_ASSIGNED: 0.22,
+  REFUSED_FREE_AGENCY: 0.1,
+});
+
 function attributeGroupFor(player) {
   return player.isPitcher
     ? PITCHING_ATTRIBUTES
@@ -106,11 +158,18 @@ function baseAgeProbability(age) {
  * @param {Date} [options.asOfDate] - defaults to now.
  * @param {{severity: string}|null} [options.injuryStatus] - this player's
  *   current injury, if any (same shape injuries.js/season.js already use).
+ * @param {'OUTRIGHT_ASSIGNED'|'REFUSED_FREE_AGENCY'|null} [options.dfaOutcome] -
+ *   the resolved outcome of a DFA that just went UNCLAIMED, passed by
+ *   engine/optionsWaiversDfa.js's designateForAssignment. See trigger 3 in
+ *   the file header. CLAIMED and RETURNED_TO_ORIGINAL_CLUB are deliberately
+ *   never passed; an unrecognized value is simply ignored rather than
+ *   throwing, matching how injuryStatus treats a severity it doesn't act on.
  * @returns {number} 0-1
  */
 export function computeRetirementProbability(player, options = {}) {
   const asOfDate = options.asOfDate ?? new Date();
   const injuryStatus = options.injuryStatus ?? null;
+  const dfaOutcome = options.dfaOutcome ?? null;
 
   if (injuryStatus?.severity === INJURY_SEVERITIES.CAREER_ENDING) return 1;
 
@@ -122,6 +181,7 @@ export function computeRetirementProbability(player, options = {}) {
     if (injuryStatus?.severity === INJURY_SEVERITIES.SEASON_ENDING) {
       probability += SEASON_ENDING_INJURY_RETIREMENT_BONUS;
     }
+    probability += DFA_RETIREMENT_BONUS_BY_OUTCOME[dfaOutcome] ?? 0;
   }
 
   return Math.min(1, probability);

@@ -17,8 +17,9 @@ import {
   optionPlayerToMinors,
   designateForAssignment,
 } from '../src/engine/optionsWaiversDfa.js';
+import { computeRetirementProbability } from '../src/engine/retirement.js';
 import { createServiceRecord } from '../src/models/ServiceRecord.js';
-import { createPlayer, createRating } from '../src/models/Player.js';
+import { createPlayer, createRating, getAge } from '../src/models/Player.js';
 import { DEVELOPMENT_LEVELS } from '../src/models/constants.js';
 import { computeFreshSeason1State, advanceToNextSeason } from '../src/data/season.js';
 import { computeCombinedReverseStandingsOrder } from '../src/engine/draft.js';
@@ -153,7 +154,109 @@ console.log('\n=== 4. designateForAssignment: three real outcomes ===\n');
   assert(resultC.establishedFreeAgentPoolById.has('dfa-refuse'), 'he becomes a real free agent instead of accepting the assignment');
 }
 
-console.log('\n=== 5. Real integration: a genuine multi-season save, real teams, real rosters ===\n');
+console.log('\n=== 5. computeRetirementProbability: the DFA bump (engine/retirement.js trigger 3) ===\n');
+{
+  // Same player, same age, same ratings — only the DFA outcome differs.
+  const veteran = (id, age) => hitter(id, 40, age, {
+    serviceRecord: createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 22, mlbServiceDays: 172 * 8 }),
+  });
+  const v = veteran('vet', 36);
+  const opts = (dfaOutcome) => ({ asOfDate: AS_OF_DATE, dfaOutcome });
+
+  const none = computeRetirementProbability(v, opts(null));
+  const outright = computeRetirementProbability(v, opts('OUTRIGHT_ASSIGNED'));
+  const refused = computeRetirementProbability(v, opts('REFUSED_FREE_AGENCY'));
+
+  assert(outright > none, `OUTRIGHT_ASSIGNED raises retirement probability (${none.toFixed(3)} -> ${outright.toFixed(3)})`);
+  assert(refused > none, `REFUSED_FREE_AGENCY raises it too (${none.toFixed(3)} -> ${refused.toFixed(3)})`);
+  // The asymmetry is the design, not an accident — see retirement.js's
+  // trigger 3: an outrighted player never rolls retirement again anywhere,
+  // while a refusal lands him in a pool that already rolls him annually.
+  assert(outright > refused, `outright-assignment carries the LARGER bump (${outright.toFixed(3)} > ${refused.toFixed(3)}) -- it is the only roll he will ever get`);
+
+  // Gated exactly like the SEASON_ENDING injury bump.
+  const young = veteran('young-vet', 26);
+  assert(
+    computeRetirementProbability(young, opts('OUTRIGHT_ASSIGNED')) === computeRetirementProbability(young, opts(null)),
+    'below the age gate, a DFA changes nothing at all (a 26-year-old being buried is adversity, not a career ending)'
+  );
+
+  // Outcomes that must never bump.
+  for (const ignored of ['CLAIMED', 'RETURNED_TO_ORIGINAL_CLUB', 'NOT_A_REAL_OUTCOME']) {
+    assert(computeRetirementProbability(v, opts(ignored)) === none, `${ignored} carries no bump (and does not throw)`);
+  }
+
+  console.log('\n  Resulting probability curve (unclaimed veteran, decline term included):');
+  console.log('    age   base   outrighted   refused');
+  for (const age of [32, 33, 36, 39, 42]) {
+    const p = veteran(`curve-${age}`, age);
+    const b = computeRetirementProbability(p, opts(null));
+    const o = computeRetirementProbability(p, opts('OUTRIGHT_ASSIGNED'));
+    const r = computeRetirementProbability(p, opts('REFUSED_FREE_AGENCY'));
+    console.log(`    ${String(age).padEnd(5)} ${b.toFixed(3)}  ${o.toFixed(3)}        ${r.toFixed(3)}`);
+  }
+  console.log('');
+}
+
+console.log('\n=== 6. designateForAssignment: the RETIRED outcome ===\n');
+{
+  // A real veteran: 8 years of service (unconditionally outright-refusal-
+  // eligible), 37 years old, unclaimed because nobody would upgrade.
+  const makeState = (age) => {
+    const vet = hitter('dfa-vet', 40, age, {
+      teamId: 'teamZ',
+      serviceRecord: createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 22, mlbServiceDays: 172 * 8 }),
+    });
+    return {
+      rosterByTeamId: new Map([
+        ['teamZ', { ...emptyRoster(), lineup: [vet] }],
+        ['teamOther', { ...emptyRoster(), lineup: [hitter('strong', 75, 25)] }],
+      ]),
+      affiliates: new Map([['teamZ-AAA', emptyRoster()]]),
+    };
+  };
+
+  // rng 0.0001 forces the roll (never a bare () => 0 -- see CLAUDE.md's Key
+  // conventions; harmless here, but the convention is worth keeping).
+  const s1 = makeState(37);
+  const retired = designateForAssignment('dfa-vet', 'teamZ', s1.rosterByTeamId, s1.affiliates, ['teamOther'], new Map(), { rng: () => 0.0001, asOfDate: AS_OF_DATE });
+  assert(retired.outcome === 'RETIRED', `an unclaimed 37-year-old can retire instead of reporting (got ${retired?.outcome})`);
+  assert(retired.retiredFrom === 'REFUSED_FREE_AGENCY', `records which path he retired from (got ${retired?.retiredFrom})`);
+  assert(!retired.updatedRosterByTeamId.get('teamZ').lineup.some((p) => p.id === 'dfa-vet'), 'he is off the active roster');
+  assert(retired.establishedFreeAgentPoolById.size === 0, 'a retired player does NOT enter the free-agent pool');
+  assert(retired.affiliateRosterByClubId.get('teamZ-AAA').lineup.length === 0, 'and does NOT land on the AAA affiliate -- retirement REPLACES the landing spot');
+
+  // Same fixture, rng that never fires -> the normal outcome, unchanged.
+  const s2 = makeState(37);
+  const notRetired = designateForAssignment('dfa-vet', 'teamZ', s2.rosterByTeamId, s2.affiliates, ['teamOther'], new Map(), { rng: () => 0.999, asOfDate: AS_OF_DATE });
+  assert(notRetired.outcome === 'REFUSED_FREE_AGENCY', `the same veteran who does not retire still resolves normally (got ${notRetired?.outcome})`);
+  assert(notRetired.establishedFreeAgentPoolById.has('dfa-vet'), 'and does enter the free-agent pool');
+
+  // The age gate holds end-to-end, not just in the probability function.
+  const s3 = makeState(26);
+  const youngResult = designateForAssignment('dfa-vet', 'teamZ', s3.rosterByTeamId, s3.affiliates, ['teamOther'], new Map(), { rng: () => 0.0001, asOfDate: AS_OF_DATE });
+  assert(youngResult.outcome !== 'RETIRED', `a 26-year-old never retires off a DFA even at a forcing rng (got ${youngResult.outcome})`);
+
+  // CLAIMED must never retire -- he was picked up, which is the opposite signal.
+  const claimedVet = hitter('claimed-vet', 60, 38, { teamId: 'teamZ', serviceRecord: createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 22, mlbServiceDays: 172 * 8 }) });
+  const claimRosters = new Map([
+    ['teamZ', { ...emptyRoster(), lineup: [claimedVet] }],
+    ['teamW', { ...emptyRoster(), lineup: [hitter('weak', 30, 25)] }],
+  ]);
+  const claimed = designateForAssignment('claimed-vet', 'teamZ', claimRosters, new Map([['teamZ-AAA', emptyRoster()]]), ['teamW'], new Map(), { rng: () => 0.0001, asOfDate: AS_OF_DATE });
+  assert(claimed.outcome === 'CLAIMED', `a claimed 38-year-old is never offered the retirement roll at all (got ${claimed.outcome})`);
+
+  // A failed Rule 5 pick goes home, never retires -- he is a young prospect.
+  const r5 = hitter('r5-vet', 40, 38, {
+    teamId: 'holder',
+    serviceRecord: { ...createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 22, mlbServiceDays: 172 * 8 }), rule5: { originalTeamId: 'orig' } },
+  });
+  const r5Rosters = new Map([['holder', { ...emptyRoster(), lineup: [r5] }]]);
+  const r5Result = designateForAssignment('r5-vet', 'holder', r5Rosters, new Map([['orig-AAA', emptyRoster()]]), ['holder'], new Map(), { rng: () => 0.0001, asOfDate: AS_OF_DATE });
+  assert(r5Result.outcome === 'RETURNED_TO_ORIGINAL_CLUB', `a Rule 5 return short-circuits before the retirement roll (got ${r5Result.outcome})`);
+}
+
+console.log('\n=== 7. Real integration: a genuine multi-season save, real teams, real rosters ===\n');
 {
   let s = computeFreshSeason1State();
   for (let i = 0; i < 3; i++) s = advanceToNextSeason(s);
@@ -169,9 +272,50 @@ console.log('\n=== 5. Real integration: a genuine multi-season save, real teams,
   const waiverOrder = computeCombinedReverseStandingsOrder([...s.rosterByTeamId.keys()].map((id) => ({ id })), s.seasonResult.standingsById);
   assert(waiverOrder.length === s.rosterByTeamId.size, `waiver priority order covers every real team (got ${waiverOrder.length}, expected ${s.rosterByTeamId.size})`);
 
-  const dfaResult = designateForAssignment(dfaTarget.id, teamId, s.rosterByTeamId, s.affiliateRosterByClubId, waiverOrder, s.establishedFreeAgentPoolById);
+  // An explicit rng, deliberately: dfaTarget is a REAL player of unknown
+  // age, so leaving this at the Math.random default would make the outcome
+  // assertion below genuinely flaky the moment he happens to be 33+.
+  const dfaResult = designateForAssignment(dfaTarget.id, teamId, s.rosterByTeamId, s.affiliateRosterByClubId, waiverOrder, s.establishedFreeAgentPoolById, { rng: () => 0.999, asOfDate: s.asOfDate });
   assert(dfaResult !== null, 'designateForAssignment against a real, live save succeeds');
   assert(['CLAIMED', 'OUTRIGHT_ASSIGNED', 'REFUSED_FREE_AGENCY'].includes(dfaResult.outcome), `a real, valid outcome was produced (got ${dfaResult.outcome})`);
+
+  // The same real DFA at a forcing rng: either he retires, or he is too
+  // young / was claimed. Both are correct; what must never happen is a
+  // crash or a player landing in two places at once.
+  const forced = designateForAssignment(dfaTarget.id, teamId, s.rosterByTeamId, s.affiliateRosterByClubId, waiverOrder, s.establishedFreeAgentPoolById, { rng: () => 0.0001, asOfDate: s.asOfDate });
+  assert(forced !== null, 'the same DFA at a forcing rng also resolves cleanly against real state');
+
+  // The above frequently resolves CLAIMED (a real 50-team waiver order
+  // almost always finds someone who'd upgrade), which would leave the
+  // RETIRED-against-real-state path never actually exercised. Isolate it:
+  // a real 33+ player off a real roster, with an EMPTY waiver order so the
+  // unclaimed branch is guaranteed. Everything else stays real state.
+  let oldTarget = null, oldTargetTeamId = null;
+  outer: for (const [tid, r] of s.rosterByTeamId) {
+    for (const k of ['lineup', 'rotation', 'bullpen', 'bench']) {
+      for (const p of r[k]) {
+        if (getAge(p, s.asOfDate) >= 36) { oldTarget = p; oldTargetTeamId = tid; break outer; }
+      }
+    }
+  }
+  assert(oldTarget !== null, 'found a real 36+ player on a real roster to exercise the retirement path');
+  if (oldTarget) {
+    const retiredForReal = designateForAssignment(
+      oldTarget.id, oldTargetTeamId, s.rosterByTeamId, s.affiliateRosterByClubId, [], s.establishedFreeAgentPoolById,
+      { rng: () => 0.0001, asOfDate: s.asOfDate }
+    );
+    assert(retiredForReal.outcome === 'RETIRED', `a real unclaimed 36+ player retires (got ${retiredForReal?.outcome})`);
+    const inPool = retiredForReal.establishedFreeAgentPoolById.has(oldTarget.id);
+    const onAffiliate = [...retiredForReal.affiliateRosterByClubId.values()].some((r) =>
+      ['lineup', 'rotation', 'bullpen', 'bench'].some((k) => (r[k] ?? []).some((p) => p.id === oldTarget.id))
+    );
+    const stillActive = [...retiredForReal.updatedRosterByTeamId.values()].some((r) =>
+      ['lineup', 'rotation', 'bullpen', 'bench'].some((k) => r[k].some((p) => p.id === oldTarget.id))
+    );
+    assert(!inPool, 'a real retired player is in NO free-agent pool');
+    assert(!onAffiliate, 'a real retired player is on NO affiliate roster');
+    assert(!stillActive, 'a real retired player is on NO active roster -- he is genuinely gone from the league');
+  }
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

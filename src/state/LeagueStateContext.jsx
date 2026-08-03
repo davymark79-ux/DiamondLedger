@@ -484,7 +484,9 @@ export function LeagueStateProvider({ children }) {
   }
 
   // The out-of-options / emergency-room path — one atomic action
-  // resolving to CLAIMED, OUTRIGHT_ASSIGNED, or REFUSED_FREE_AGENCY (see
+  // resolving to CLAIMED, OUTRIGHT_ASSIGNED, REFUSED_FREE_AGENCY, RETIRED
+  // (an unclaimed veteran calling it a career — engine/retirement.js's
+  // trigger 3), or RETURNED_TO_ORIGINAL_CLUB for a Rule 5 pick (see
   // engine/optionsWaiversDfa.js's own header for why this collapses real
   // MLB's 7-day DFA window into a single call). Waiver priority is
   // computed fresh each call from the CURRENT season's own standings —
@@ -495,7 +497,12 @@ export function LeagueStateProvider({ children }) {
     if (isSimulating) return null;
     const waiverPriorityOrder = computeCombinedReverseStandingsOrder(teams, state.seasonResult.standingsById);
     const result = designateForAssignmentEngine(
-      playerId, teamId, state.rosterByTeamId, state.affiliateRosterByClubId, waiverPriorityOrder, state.establishedFreeAgentPoolById
+      playerId, teamId, state.rosterByTeamId, state.affiliateRosterByClubId, waiverPriorityOrder, state.establishedFreeAgentPoolById,
+      // asOfDate must be the IN-GAME date, not wall-clock — the retirement
+      // age check keys off it (same threading signEstablishedFreeAgent
+      // already needed for its salary calc). rng is left at its Math.random
+      // default: a one-off commissioner action, not seeded simulation.
+      { asOfDate: state.asOfDate }
     );
     if (!result) return null;
     const next = {

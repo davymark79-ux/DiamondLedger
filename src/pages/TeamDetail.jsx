@@ -217,6 +217,7 @@ function RosterActionButton({ playerId, teamId, onAction }) {
       OUTRIGHT_ASSIGNED: 'Unclaimed on waivers — outright-assigned to the AAA affiliate.',
       REFUSED_FREE_AGENCY: 'Unclaimed on waivers — he refused the assignment and elected free agency.',
       RETURNED_TO_ORIGINAL_CLUB: 'A failed Rule 5 selection — returned to the club he was drafted from.',
+      RETIRED: 'Unclaimed on waivers — rather than report, he announced his retirement.',
     };
     onAction(outcomeMessages[result.outcome]);
   }
