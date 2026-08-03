@@ -43,6 +43,14 @@ const LEAGUE_WIRE_MILB_FA_LIMIT = 15;
 // Around 110 rehab activations happen in a real season — same reasoning.
 const LEAGUE_WIRE_REHAB_LIMIT = 15;
 
+const AWARD_WIRE_LABELS = Object.freeze({
+  MVP: 'Most Valuable Player',
+  BEST_PITCHER: 'Best Pitcher',
+  ROOKIE_OF_THE_YEAR: 'Rookie of the Year',
+  MANAGER_OF_THE_YEAR: 'Manager of the Year',
+  SILVER_SLUGGER: 'Silver Slugger',
+});
+
 // A trivial, side-effect-free "replace state" reducer — safe under React 18
 // StrictMode's dev-mode double-invocation of reducer functions (same
 // payload in, same result out, no rng or other side effect touched here;
@@ -554,6 +562,27 @@ export function LeagueStateProvider({ children }) {
 
   // This season's rehab stints — who was sent out and how each return
   // resolved. Season-scoped, like the injury/firing logs.
+  // Awards (engine/awards.js) — this season's winners plus any award
+  // permanently renamed this season, and the running cross-season history.
+  function getAwardsResult() {
+    return state.awardsResult ?? { seasonNumber: state.seasonNumber, awards: [], namedThisSeason: [] };
+  }
+
+  function getAwardNames() {
+    return state.awardNamesBySlot ?? new Map();
+  }
+
+  // Per-season stat lines. These have ALWAYS been persisted inside
+  // seasonResult (engine/season.js accumulates them) but were never
+  // exposed — the same live-but-unexposed gap §33 had to close for
+  // cupState. Awards are their first real consumer.
+  function getSeasonStats(playerId) {
+    return {
+      batting: state.seasonResult.seasonBattingStatsById?.get(playerId) ?? null,
+      pitching: state.seasonResult.seasonPitchingStatsById?.get(playerId) ?? null,
+    };
+  }
+
   function getRehabActivity() {
     return {
       started: state.seasonResult.rehabStintsStarted ?? [],
@@ -699,6 +728,33 @@ export function LeagueStateProvider({ children }) {
       });
     }
 
+    // Awards are decided once the season is complete, so they file at
+    // Season Start alongside the other offseason events. An award being
+    // permanently RENAMED is a genuine historical event — the doc calls it
+    // out as "excellent League Wire material" — so those lead.
+    for (const named of state.awardsResult?.namedThisSeason ?? []) {
+      events.push({
+        id: `awardnamed-${named.slotKey}-${state.seasonNumber}`,
+        type: 'award',
+        gameNumber: -1,
+        team: '—',
+        detail: `${named.name} — the ${named.leagueId === 'FOUNDRY' ? 'Foundry' : 'Exchange'} ${named.position ? `${named.position} Silver Slugger` : AWARD_WIRE_LABELS[named.type] ?? named.type} is permanently renamed${named.reason === 'STATISTICAL_DOMINANCE' ? ' after a historically dominant season' : ' after a third win'}.`,
+      });
+    }
+
+    // Only the majors go on the wire — 17 Silver Sluggers a season would
+    // bury everything else, same reasoning as Phase 9's MiLB cap.
+    for (const a of (state.awardsResult?.awards ?? []).filter((x) => x.type !== 'SILVER_SLUGGER')) {
+      const team = teamsById.get(a.teamId);
+      events.push({
+        id: `award-${a.type}-${a.leagueId}-${state.seasonNumber}`,
+        type: 'award',
+        gameNumber: -1,
+        team: team ? `${team.city} ${team.nickname}` : '—',
+        detail: `${a.firstName} ${a.lastName} won the ${a.leagueId === 'FOUNDRY' ? 'Foundry' : 'Exchange'} ${AWARD_WIRE_LABELS[a.type] ?? a.type} with ${(a.voteShare * 100).toFixed(0)}% of the writers' vote.`,
+      });
+    }
+
     // Promotion/relegation happened at the boundary entering THIS season,
     // before its first game — sorts as the oldest event in the feed
     // (gameNumber -1, before any real in-season game's 0-based numbering).
@@ -788,6 +844,9 @@ export function LeagueStateProvider({ children }) {
     getPlayerRule5Status,
     getPlayerRustStatus,
     getRehabActivity,
+    getAwardsResult,
+    getAwardNames,
+    getSeasonStats,
     getLeagueWireEvents,
     buildMatchup,
     getAffiliateClub,

@@ -51,7 +51,12 @@ const LEAGUE_AVERAGE_PITCHER = {
 // wOBA-like linear weights, anchored to real modern-MLB values (outs and
 // strikeouts carry no weight) — explicit placeholder, same tuning status
 // as plateAppearanceConstants.js's own anchored rates.
-const WOBA_WEIGHTS = Object.freeze({
+// Exported — engine/awards.js reuses these exact real-MLB-anchored linear
+// weights to score a full SEASON's offensive line, rather than defining a
+// second offensive composite that would drift from this one. Same "export
+// the private helper for reuse" precedent as minorLeagues.js's
+// playerQualityScore and freeAgency.js's candidatesForSigning.
+export const WOBA_WEIGHTS = Object.freeze({
   [PA_OUTCOMES.WALK]: 0.69,
   [PA_OUTCOMES.HIT_BY_PITCH]: 0.72,
   [PA_OUTCOMES.SINGLE]: 0.89,

@@ -39,7 +39,8 @@
     "validate:arb": "node scripts/validate-arbitration.mjs",
     "validate:rule5": "node scripts/validate-rule5.mjs",
     "validate:rights": "node scripts/validate-player-rights.mjs",
-    "validate:rehab": "node scripts/validate-rehab.mjs"
+    "validate:rehab": "node scripts/validate-rehab.mjs",
+    "validate:awards": "node scripts/validate-awards.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

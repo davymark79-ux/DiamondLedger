@@ -15,6 +15,7 @@ import HallOfFame from './pages/HallOfFame';
 import Draft from './pages/Draft';
 import FreeAgents from './pages/FreeAgents';
 import Trades from './pages/Trades';
+import Awards from './pages/Awards';
 
 export default function App() {
   return (
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/draft" element={<Draft />} />
               <Route path="/free-agents" element={<FreeAgents />} />
               <Route path="/trades" element={<Trades />} />
+              <Route path="/awards" element={<Awards />} />
             </Routes>
           </main>
         </div>

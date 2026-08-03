@@ -11,6 +11,7 @@ const links = [
   { to: '/teams', label: 'Teams', icon: Users },
   { to: '/schedule', label: 'Schedule', icon: CalendarDays },
   { to: '/box-score', label: 'Box Score', icon: PlayCircle },
+  { to: '/awards', label: 'Awards', icon: Trophy },
   { to: '/hall-of-fame', label: 'Hall of Fame', icon: Award },
   { to: '/cup', label: 'Cup', icon: Trophy },
   { to: '/financials', label: 'Financials', icon: Landmark },

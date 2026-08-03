@@ -224,7 +224,13 @@ export function advanceOffseason(teams, rosterByTeamId, managerByTeamId, roleSta
 // re-rolled (not preserved) — the doc frames the outlet as belonging to
 // the city/beat, not a specific person, so this is a fresh draw at the
 // same city, not literally reusing the old outlet string.
-function advanceWritersCorps(writers, rng, asOfDate) {
+// Exported — the Awards system (engine/awards.js) needs the SAME
+// season-boundary writer advancement in LIVE state that this offline
+// Hall-of-Fame pipeline has always done internally. Same "export the
+// private helper rather than duplicate it" precedent as
+// rosterProtection.js's eligiblePlayersForTeam and minorLeagues.js's
+// findBestFit/generateForLevel.
+export function advanceWritersCorps(writers, rng, asOfDate) {
   const retiredWriterIds = [];
   const advanced = writers.map((writer) => {
     if (!rollWriterRetirement(writer, rng, { asOfDate })) return writer;

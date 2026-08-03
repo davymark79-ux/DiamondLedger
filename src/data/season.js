@@ -67,10 +67,50 @@ import { advanceServiceTime } from '../engine/serviceTime.js';
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
 import { runMinorLeagueFreeAgencySweep, advanceMinorLeagueFreeAgentPool } from '../engine/minorLeagueFreeAgency.js';
+import { runSeasonAwards } from '../engine/awards.js';
+import { resolveAwardNaming, awardSlotKey } from '../engine/awardNaming.js';
+import { advanceWritersCorps } from '../engine/leagueProgression.js';
+import { buildWritersCorps } from '../models/seed/writersCorpsSeed.js';
+import { SERVICE_DAYS_PER_SEASON } from '../engine/serviceTime.js';
 import { createRng } from '../models/generation/random.js';
 import { saveLeagueState, loadLeagueState, deleteLeagueState } from './indexedDbStorage.js';
 
 const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season seed — season 1 must reproduce it exactly
+// Writers Corps generation gets its own dedicated stream so seeding the
+// electorate can never perturb which players/managers get generated —
+// same precedent as leagueSeed.js's TEAM_ECONOMICS_SEED.
+const WRITERS_CORPS_SEED = 20260501;
+
+/**
+ * Awards for one completed season, plus the milestone-naming resolution.
+ * Shared by season 1 and every later transition so the two paths can't
+ * drift — awards need nothing but a finished season's own stats, so
+ * unlike Rule 5/arbitration they genuinely DO run in season 1.
+ */
+function runAwardsForSeason({ currentTeams, rosterByTeamId, seasonResult, writers, priorHistory, priorNames, seasonNumber, rng }) {
+  const { awards } = runSeasonAwards({
+    teams: currentTeams,
+    rosterByTeamId,
+    seasonResult,
+    managerAssignmentById: seasonResult.managerAssignmentById,
+    writers,
+    rng,
+    // advanceServiceTime credits a full season BEFORE awards run, so a
+    // true rookie's record already includes the season being judged —
+    // isRookieSeason has to subtract it back out.
+    seasonServiceCredit: SERVICE_DAYS_PER_SEASON,
+  });
+
+  const historyEntries = awards.map((a) => ({
+    slotKey: awardSlotKey(a.type, a.leagueId, a.position),
+    playerId: a.playerId, firstName: a.firstName, lastName: a.lastName,
+    score: a.score, seasonNumber,
+  }));
+  const awardHistory = [...priorHistory, ...historyEntries];
+  const { namesBySlot, namedThisSeason } = resolveAwardNaming(awardHistory, priorNames, awards, seasonNumber);
+
+  return { awardsResult: { seasonNumber, awards, namedThisSeason }, awardHistory, awardNamesBySlot: namesBySlot };
+}
 // The old localStorage key (v1-v7, superseded by the IndexedDB migration
 // above) — exported purely so src/state/LeagueStateContext.jsx can do a
 // one-time best-effort cleanup of any orphaned entry left over from before
@@ -109,7 +149,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 21;
+export const STATE_SCHEMA_VERSION = 22;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -455,6 +495,14 @@ export function computeFreshSeason1State() {
   // every player gets credited every season, not just once).
   advanceServiceTime(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, 1, asOfDate);
 
+  // Awards (engine/awards.js) — the electorate is seeded once here and
+  // carried forward from now on.
+  const writersCorps = buildWritersCorps(teams, createRng(WRITERS_CORPS_SEED));
+  const season1Awards = runAwardsForSeason({
+    currentTeams: teams, rosterByTeamId, seasonResult,
+    writers: writersCorps, priorHistory: [], priorNames: new Map(), seasonNumber: 1, rng,
+  });
+
   return {
     seasonNumber: 1,
     asOfDate,
@@ -471,6 +519,10 @@ export function computeFreshSeason1State() {
     // Same "nothing to evaluate yet" shape: Rule 5 exposure needs several
     // accrued minor-league seasons, and season 1 credits the first one.
     rule5Result: { selections: [], stuck: [], returned: [] },
+    writersCorps,
+    awardsResult: season1Awards.awardsResult,
+    awardHistory: season1Awards.awardHistory,
+    awardNamesBySlot: season1Awards.awardNamesBySlot,
     // Same "nothing to evaluate yet" shape: minor-league free agency needs
     // 7 accrued minor-league seasons, and season 1 credits the first.
     playerRightsResult: { minorLeagueFreeAgents: [], minorLeagueFreeAgentsEligible: 0, minorLeagueFreeAgentsRetired: 0 },
@@ -817,6 +869,18 @@ export function advanceToNextSeason(state) {
     minorLeagueFreeAgentsRetired: minorLeagueFaRetirements.retired,
   };
 
+  // Awards — the electorate ages and turns over first (retirement +
+  // same-city replacement, reusing engine/leagueProgression.js's own
+  // advanceWritersCorps rather than duplicating it), then votes.
+  const { writers: writersCorps } = advanceWritersCorps(state.writersCorps ?? [], rng, asOfDate);
+  const awardsThisSeason = runAwardsForSeason({
+    currentTeams: teamsForNextSeason, rosterByTeamId, seasonResult,
+    writers: writersCorps,
+    priorHistory: state.awardHistory ?? [],
+    priorNames: state.awardNamesBySlot ?? new Map(),
+    seasonNumber, rng,
+  });
+
   const arbitrationResult = runArbitrationAndTenderSweep(
     rosterByTeamId,
     state.establishedFreeAgentPoolById,
@@ -833,6 +897,10 @@ export function advanceToNextSeason(state) {
     rule5Result,
     playerRightsResult,
     minorLeagueFreeAgentPoolById: state.minorLeagueFreeAgentPoolById,
+    writersCorps,
+    awardsResult: awardsThisSeason.awardsResult,
+    awardHistory: awardsThisSeason.awardHistory,
+    awardNamesBySlot: awardsThisSeason.awardNamesBySlot,
     rosterByTeamId,
     managerByTeamId,
     roleStateById: state.roleStateById,

@@ -7,7 +7,7 @@ import { useLeagueState } from '../state/LeagueStateContext.jsx';
 // categories had no underlying system at all (the design doc's Scripted
 // Event framework was never built, see CLAUDE.md). Dropped rather than
 // kept as dead filter options.
-const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation', 'arbitration', 'nonTender', 'rule5', 'minorLeagueFA', 'rehab'];
+const TYPES = ['all', 'injury', 'firing', 'promotion', 'relegation', 'arbitration', 'nonTender', 'rule5', 'minorLeagueFA', 'rehab', 'award'];
 
 // 'nonTender' is the one type whose camelCase id doesn't read well under
 // the filter buttons' `capitalize` class — everything else is a single
@@ -25,7 +25,7 @@ export default function Events() {
       <PageHeader
         eyebrow="Season Activity"
         title="League Wire"
-        description="Real injury, manager Firing & Rehiring, promotion/relegation, and arbitration/non-tender events from the simulated season. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings, promotion/relegation, and arbitration are all complete logs. Arbitration hearings and non-tenders resolve in the offseason entering the current season, so they file alongside promotion/relegation at Season Start. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
+        description="Real injury, manager Firing & Rehiring, promotion/relegation, arbitration/non-tender, and season-award events from the simulated season. Award entries cover the majors only — the 17 Silver Sluggers a season would bury every other event type — and lead with any award permanently renamed that year. Injuries shown are only those still active as of season's end — a player hurt earlier who's already recovered leaves no trace here; firings, promotion/relegation, and arbitration are all complete logs. Arbitration hearings and non-tenders resolve in the offseason entering the current season, so they file alongside promotion/relegation at Season Start. No financial/expansion/stadium/CBA events exist yet — those systems aren't built."
       />
 
       <div className="flex gap-1 mb-5 flex-wrap">
