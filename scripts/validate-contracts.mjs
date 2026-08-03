@@ -10,7 +10,9 @@
 // just on a small fixture.
 
 import {
-  computeServiceTimeProxyFraction,
+  computeServiceTimeLeverage,
+  ARBITRATION_LEVERAGE_FLOOR,
+  ARBITRATION_LEVERAGE_CEILING,
   generateMajorsStyleSalary,
   generateMinorsSalary,
   generateContractForPlayer,
@@ -25,6 +27,9 @@ import {
 import { CONTRACT_TYPES, createContract } from '../src/models/Contract.js';
 import { signAmateurFreeAgent, signEstablishedFreeAgent } from '../src/engine/freeAgency.js';
 import { createPlayer, createRating } from '../src/models/Player.js';
+import { createServiceRecord } from '../src/models/ServiceRecord.js';
+import { SERVICE_DAYS_PER_SEASON, seedFoundingServiceTime, computeServiceYears } from '../src/engine/serviceTime.js';
+import { runFreeAgencySweep, hasJustReachedFreeAgency, FREE_AGENCY_RESIGN_PROBABILITY } from '../src/engine/freeAgency.js';
 import { computeFreshSeason1State, advanceToNextSeason, STATE_SCHEMA_VERSION } from '../src/data/season.js';
 
 let failures = 0;
@@ -64,39 +69,62 @@ function emptyAffiliateRoster() {
   return { lineup: [], rotation: [], bullpen: [], bench: [] };
 }
 
-console.log('=== 1. computeServiceTimeProxyFraction: ramp shape ===\n');
+// §47 — salary now keys off REAL accrued service time, so these fixtures
+// carry a real ServiceRecord rather than relying on age.
+const withService = (id, contact, years, age = 30) =>
+  hitter(id, contact, age, {
+    serviceRecord: createServiceRecord({
+      firstProSeasonNumber: 1,
+      ageAtSigning: 23,
+      mlbServiceDays: Math.round(years * SERVICE_DAYS_PER_SEASON),
+    }),
+  });
+
+console.log('=== 1. computeServiceTimeLeverage: the three real MLB regimes (§47) ===\n');
 {
-  assert(computeServiceTimeProxyFraction(20) === 0, 'exactly 0 at the ramp start age');
-  assert(computeServiceTimeProxyFraction(15) === 0, 'stays 0 below the ramp start age, never negative');
-  assert(computeServiceTimeProxyFraction(28) === 1, 'exactly 1 at the ramp end age');
-  assert(computeServiceTimeProxyFraction(40) === 1, 'stays 1 above the ramp end age, never over 1');
-  const mid = computeServiceTimeProxyFraction(24);
-  assert(mid > 0 && mid < 1, 'strictly between 0 and 1 partway through the ramp');
-  assert(computeServiceTimeProxyFraction(26) > computeServiceTimeProxyFraction(22), 'monotonically increasing through the ramp');
+  const lev = (years) => computeServiceTimeLeverage({ mlbServiceDays: Math.round(years * SERVICE_DAYS_PER_SEASON) });
+
+  assert(lev(0) === 0, 'a rookie has zero leverage (prices at exactly the league minimum)');
+  assert(lev(2.9) === 0, 'still zero just short of arbitration');
+  assert(lev(3) === ARBITRATION_LEVERAGE_FLOOR, `jumps straight to the arbitration floor (${ARBITRATION_LEVERAGE_FLOOR}) on reaching 3 years`);
+  assert(lev(6) === 1, 'full open-market value at 6 years');
+  assert(lev(12) === 1, 'stays capped at 1 well beyond free agency, never above');
+
+  // The cliffs are real MLB, not artefacts — assert them explicitly so a
+  // future "smoothing" refactor has to argue with a test.
+  assert(lev(3) - lev(2.99) > 0.3, 'a REAL cliff at 3 years — reaching arbitration is a step change, not a ramp');
+  assert(lev(6) - lev(5.99) > 0.05, 'a REAL cliff at 6 years — reaching free agency is a step change too');
+
+  const mid = lev(4.5);
+  assert(mid > ARBITRATION_LEVERAGE_FLOOR && mid < ARBITRATION_LEVERAGE_CEILING, 'ramps strictly between floor and ceiling inside the arbitration window');
+  assert(lev(5) > lev(4), 'monotonically increasing through the arbitration window');
+  assert(computeServiceTimeLeverage(null) === 0, 'a missing record reads as zero service (league minimum), not a crash');
 }
 
-console.log('\n=== 2. generateMajorsStyleSalary: quality/age direction and bounds ===\n');
+console.log('\n=== 2. generateMajorsStyleSalary: quality/service direction and bounds ===\n');
 {
-  const weak = hitter('weak', 25, 30);
-  const strong = hitter('strong', 75, 30);
+  const weak = withService('weak', 25, 8);
+  const strong = withService('strong', 75, 8);
   assert(
-    generateMajorsStyleSalary(strong, AS_OF_DATE) > generateMajorsStyleSalary(weak, AS_OF_DATE),
-    'higher quality (holding age fixed) earns a higher salary'
+    generateMajorsStyleSalary(strong) > generateMajorsStyleSalary(weak),
+    'higher quality (holding service fixed) earns a higher salary'
   );
 
-  const young = hitter('young', 60, 20);
-  const veteran = hitter('veteran', 60, 30);
-  assert(
-    generateMajorsStyleSalary(veteran, AS_OF_DATE) > generateMajorsStyleSalary(young, AS_OF_DATE),
-    'more service-time-proxy age (holding quality fixed) earns a higher salary'
-  );
+  // The §47 payoff: two players with IDENTICAL age and quality, differing
+  // only in real accrued service, are now priced differently — the exact
+  // thing the age proxy could not express.
+  const rookie = withService('rookie', 60, 0, 30);
+  const arbGuy = withService('arb', 60, 4, 30);
+  const freeAgent = withService('fa', 60, 7, 30);
+  assert(generateMajorsStyleSalary(rookie) === MLB_MIN_SALARY, 'a pre-arbitration player earns exactly the league minimum regardless of quality');
+  assert(generateMajorsStyleSalary(arbGuy) > generateMajorsStyleSalary(rookie), 'reaching arbitration raises pay for the SAME player at the SAME age');
+  assert(generateMajorsStyleSalary(freeAgent) > generateMajorsStyleSalary(arbGuy), 'reaching free agency raises it again');
 
-  const worst = hitter('worst', 20, 18);
-  assert(generateMajorsStyleSalary(worst, AS_OF_DATE) >= MLB_MIN_SALARY, 'never pays below MLB_MIN_SALARY, even for a young, low-quality player');
-  assert(generateMajorsStyleSalary(worst, AS_OF_DATE) === MLB_MIN_SALARY, 'a genuinely bottom-of-scale player earns exactly the minimum (0 service-time fraction floors him there)');
+  const worst = withService('worst', 20, 10);
+  assert(generateMajorsStyleSalary(worst) >= MLB_MIN_SALARY, 'never pays below MLB_MIN_SALARY, even at full service');
 
-  const best = hitter('best', 80, 35);
-  assert(best && generateMajorsStyleSalary(best, AS_OF_DATE) <= MLB_MAX_SALARY, 'never exceeds MLB_MAX_SALARY even for a max-quality, full-service player');
+  const best = withService('best', 80, 10);
+  assert(generateMajorsStyleSalary(best) <= MLB_MAX_SALARY, 'never exceeds MLB_MAX_SALARY even for a max-quality, full-service player');
 }
 
 console.log('\n=== 3. generateMinorsSalary: level ordering and bounds ===\n');
@@ -117,15 +145,15 @@ console.log('\n=== 3. generateMinorsSalary: level ordering and bounds ===\n');
 console.log('\n=== 4. generateContractForPlayer: per-context type/guaranteed correctness ===\n');
 {
   const p = hitter('ctx-p', 55, 27);
-  const active = generateContractForPlayer(p, 'ACTIVE', null, AS_OF_DATE);
+  const active = generateContractForPlayer(p, 'ACTIVE', null);
   assert(active.type === CONTRACT_TYPES.MAJORS, 'ACTIVE context produces a MAJORS contract');
   assert(active.guaranteed === true, 'ACTIVE context is guaranteed');
 
-  const reserve = generateContractForPlayer(p, 'RESERVE_TAXI', null, AS_OF_DATE);
+  const reserve = generateContractForPlayer(p, 'RESERVE_TAXI', null);
   assert(reserve.type === CONTRACT_TYPES.BOTH, 'RESERVE_TAXI context produces a BOTH contract');
   assert(reserve.guaranteed === true, 'RESERVE_TAXI context is guaranteed');
 
-  const minors = generateContractForPlayer(p, 'MINORS_DEPTH', 'AA', AS_OF_DATE);
+  const minors = generateContractForPlayer(p, 'MINORS_DEPTH', 'AA');
   assert(minors.type === CONTRACT_TYPES.MINORS, 'MINORS_DEPTH context produces a MINORS contract');
   assert(minors.guaranteed === false, 'MINORS_DEPTH context is NOT guaranteed');
   assert(minors.annualSalary < active.annualSalary, 'a MINORS_DEPTH salary is far below an ACTIVE salary for the same player');
@@ -149,7 +177,7 @@ console.log('\n=== 5. assignMissingContracts: fills gaps, leaves existing contra
   ]);
   const reserveRosterByTeamId = new Map([['teamX', ['reserve-aaa']]]);
 
-  const { assigned } = assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, AS_OF_DATE);
+  const { assigned } = assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId);
   assert(assigned === 4, `exactly the 4 gapped players get a contract (got ${assigned})`);
 
   const updatedRoster = rosterByTeamId.get('teamX');
@@ -166,7 +194,7 @@ console.log('\n=== 5. assignMissingContracts: fills gaps, leaves existing contra
   const depthAaAfter = affiliateRosterByClubId.get('teamX-AA').lineup.find((p) => p.id === 'depth-aa');
   assert(depthAaAfter.contract?.type === CONTRACT_TYPES.MINORS, 'a non-reserve AA player also gets a MINORS contract');
 
-  const { assigned: secondPass } = assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, AS_OF_DATE);
+  const { assigned: secondPass } = assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId);
   assert(secondPass === 0, 'a second call over the now-fully-contracted fixture assigns nothing new (idempotent)');
 }
 
@@ -197,7 +225,7 @@ console.log('\n=== 6. computeTeamPayroll / computeLuxuryTaxOwed: hand-computed f
 console.log('\n=== 7. Real data/season.js wiring: every player has a contract, season-1 payroll re-derives correctly ===\n');
 {
   const state1 = computeFreshSeason1State();
-  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 22, `schemaVersion is the current STATE_SCHEMA_VERSION, 22 (got ${state1.schemaVersion})`);
+  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 23, `schemaVersion is the current STATE_SCHEMA_VERSION, 23 (got ${state1.schemaVersion})`);
 
   let totalPlayers = 0;
   let missing = 0;
@@ -243,7 +271,22 @@ console.log('\n=== 8. Real season transition: existing salaries stay unchanged, 
   const state2 = advanceToNextSeason(state1);
   const carriedPlayer = state2.rosterByTeamId.get(sampleTeamId).lineup.find((p) => p.id === priorPlayerId);
   if (carriedPlayer) {
-    assert(carriedPlayer.contract.annualSalary === priorSalary, "a player who's still on the roster next season keeps the EXACT same salary (sticky-once-assigned)");
+    // §47 CHANGED THIS INVARIANT DELIBERATELY, and the old assertion
+    // ("keeps the EXACT same salary, sticky-once-assigned") is now false by
+    // design — the same situation §40 hit with validate:freeagency's
+    // "pool never grows". Salary is still sticky by DEFAULT, but two real
+    // re-pricing events now exist: arbitration (3-6 years) and free agency
+    // (at 6). So the honest invariant is "unchanged UNLESS a re-pricing
+    // event fired", which this tests by picking a carried player who
+    // crossed neither threshold.
+    const years = computeServiceYears(carriedPlayer.serviceRecord?.mlbServiceDays ?? 0);
+    const inArbWindow = years >= 3 && years < 6;
+    const justHitFreeAgency = hasJustReachedFreeAgency(carriedPlayer);
+    if (!inArbWindow && !justHitFreeAgency) {
+      assert(carriedPlayer.contract.annualSalary === priorSalary, 'a carried player who triggered NO re-pricing event keeps the exact same salary (still sticky by default)');
+    } else {
+      assert(true, `sample player hit a real re-pricing event (${inArbWindow ? 'arbitration' : 'free agency'}) — salary is SUPPOSED to move`);
+    }
   } else {
     console.log('  (sample player retired/moved this transition — sticky-salary check skipped for him, not a failure)');
   }
@@ -280,12 +323,20 @@ console.log('\n=== 9. signAmateurFreeAgent / signEstablishedFreeAgent: immediate
   assert(signedAmateur?.contract?.annualSalary > 0, 'the immediate contract has a real, positive salary');
 
   const staleContract = createContract({ type: CONTRACT_TYPES.MAJORS, annualSalary: 1, guaranteed: true }); // deliberately absurd, must NOT survive
-  const established = hitter('established-fa', 65, 29, { contract: staleContract, teamId: null });
+  // §47 — this fixture needs REAL accrued service now. Before the swap it
+  // relied on age alone, and a 29-year-old priced near market; under
+  // service-time pricing a record-less player correctly earns exactly the
+  // league minimum, which is the engine being right, not a regression.
+  const established = hitter('established-fa', 65, 29, {
+    contract: staleContract,
+    teamId: null,
+    serviceRecord: createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 23, mlbServiceDays: 7 * SERVICE_DAYS_PER_SEASON }),
+  });
   const establishedFreeAgentPoolById = new Map([['established-fa', established]]);
   const incumbent = hitter('incumbent', 20, 30, { contract: createContract({ type: CONTRACT_TYPES.MAJORS, annualSalary: 500_000, guaranteed: true }) });
   const roster = { lineup: [incumbent], rotation: [], bullpen: [], bench: [] };
 
-  const establishedResult = signEstablishedFreeAgent('established-fa', 'teamZ', establishedFreeAgentPoolById, roster, AS_OF_DATE);
+  const establishedResult = signEstablishedFreeAgent('established-fa', 'teamZ', establishedFreeAgentPoolById, roster);
   assert(establishedResult !== null, 'the established signing succeeds against a real fixture');
   const signedEstablished = establishedResult.updatedRoster.lineup.find((p) => p.id === 'established-fa');
   assert(signedEstablished?.contract?.type === CONTRACT_TYPES.MAJORS, 'a freshly-signed established free agent gets an immediate MAJORS contract');
@@ -299,5 +350,82 @@ console.log('\n=== 10. Sanity: SALARY_FLOOR and LUXURY_TAX_THRESHOLD are real, d
   assert(LUXURY_TAX_THRESHOLD > SALARY_FLOOR, 'LUXURY_TAX_THRESHOLD sits above SALARY_FLOOR (a real gap for teams to sit inside)');
 }
 
+
+console.log('\n=== 11. seedFoundingServiceTime: the founding-generation bootstrap (§47) ===\n');
+{
+  // Service accrues from LEAGUE start, not career start — without this a
+  // 37-year-old founder reads as a rookie and prices at the minimum forever.
+  const roster = {
+    lineup: [hitter('vet37', 60, 37), hitter('kid21', 60, 21)],
+    rotation: [], bullpen: [],
+    bench: [hitter('hasHistory', 60, 30, {
+      serviceRecord: createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 23, mlbServiceDays: 2 * SERVICE_DAYS_PER_SEASON }),
+    })],
+  };
+  const map = new Map([['t', roster]]);
+  seedFoundingServiceTime(map, 1, AS_OF_DATE);
+  const out = map.get('t');
+  const byId = (id) => [...out.lineup, ...out.bench].find((p) => p.id === id);
+
+  const vet = byId('vet37');
+  const kid = byId('kid21');
+  assert(computeServiceYears(vet.serviceRecord.mlbServiceDays) === 14, `a 37-year-old founder is seeded 14 years of service (got ${computeServiceYears(vet.serviceRecord.mlbServiceDays)})`);
+  assert(computeServiceYears(kid.serviceRecord.mlbServiceDays) === 0, 'a 21-year-old founder is seeded zero — younger than the assumed debut age');
+  assert(vet.serviceRecord.wasEverProtected === true, 'a founder with real MLB time is marked as having been on a 50-man roster');
+  assert(vet.serviceRecord.ageAtSigning === 23, 'ageAtSigning is clamped to the assumed debut age, not stamped as his age TODAY');
+  assert(kid.serviceRecord.ageAtSigning === 21, "a founder younger than the debut age keeps his own real, younger age");
+
+  // Must never clobber genuine accrued history.
+  const kept = byId('hasHistory');
+  assert(computeServiceYears(kept.serviceRecord.mlbServiceDays) === 2, 'a player with real accrued service is left completely untouched');
+
+  // Idempotent — safe to call twice, cannot corrupt an in-progress league.
+  seedFoundingServiceTime(map, 1, AS_OF_DATE);
+  const vet2 = [...map.get('t').lineup].find((p) => p.id === 'vet37');
+  assert(computeServiceYears(vet2.serviceRecord.mlbServiceDays) === 14, 'a second call is a no-op (idempotent)');
+
+  // The whole point: this is what stops the founding generation pricing at
+  // the league minimum.
+  assert(generateMajorsStyleSalary(vet) > generateMajorsStyleSalary(kid), 'the seeded veteran now out-earns the seeded rookie at identical quality');
+}
+
+console.log('\n=== 12. runFreeAgencySweep: flow-not-stock, and no roster depletion (§47) ===\n');
+{
+  const svc = (years) => createServiceRecord({ firstProSeasonNumber: 1, ageAtSigning: 23, mlbServiceDays: Math.round(years * SERVICE_DAYS_PER_SEASON) });
+
+  // hasJustReachedFreeAgency is a FLOW: crossing 6 years THIS season.
+  assert(hasJustReachedFreeAgency({ serviceRecord: svc(6) }) === true, 'a player who just crossed 6 years is caught');
+  assert(hasJustReachedFreeAgency({ serviceRecord: svc(9) }) === false, 'a long-time 9-year veteran is NOT re-swept every season (flow, not stock)');
+  assert(hasJustReachedFreeAgency({ serviceRecord: svc(5) }) === false, 'a 5-year player is not yet eligible');
+
+  const makeState = () => {
+    const roster = {
+      lineup: [hitter('crosser', 70, 30, { teamId: 'tA', serviceRecord: svc(6) }), hitter('stayer', 50, 25, { teamId: 'tA', serviceRecord: svc(2) })],
+      rotation: [], bullpen: [], bench: [],
+    };
+    return new Map([['tA', roster]]);
+  };
+
+  // rng below the re-sign rate -> stays put, but RE-PRICED.
+  const stayMap = makeState();
+  const before = stayMap.get('tA').lineup.find((p) => p.id === 'crosser').contract?.annualSalary ?? 0;
+  const r1 = runFreeAgencySweep([{ id: 'tA' }], stayMap, new Map(), new Map(), () => FREE_AGENCY_RESIGN_PROBABILITY - 0.01, AS_OF_DATE);
+  const stayed = stayMap.get('tA').lineup.find((p) => p.id === 'crosser');
+  assert(r1.reachedFreeAgency === 1 && r1.reSigned === 1 && r1.toMarket === 0, 'below the re-sign roll he stays with his own club');
+  assert(!!stayed, 'and is still on the roster');
+  assert((stayed.contract?.annualSalary ?? 0) > before, 'but is RE-PRICED at market — the whole point of the sweep');
+
+  // rng above the re-sign rate -> reaches the open market.
+  const goMap = makeState();
+  const pool = new Map();
+  const r2 = runFreeAgencySweep([{ id: 'tA' }], goMap, pool, new Map(), () => FREE_AGENCY_RESIGN_PROBABILITY + 0.01, AS_OF_DATE);
+  assert(r2.toMarket === 1, 'above the re-sign roll he reaches the open market');
+  // He vacated a slot and then, being the only pool player, was signed back
+  // into it by the refill pass — proving section sizes are restored.
+  assert(goMap.get('tA').lineup.length === 2, 'the vacated roster slot is REFILLED — section size never shrinks (the §34/§40 depletion guard)');
+
+  // A player who never crossed is untouched either way.
+  assert(goMap.get('tA').lineup.some((p) => p.id === 'stayer'), 'a player nowhere near free agency is left alone');
+}
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);
 process.exitCode = failures === 0 ? 0 : 1;

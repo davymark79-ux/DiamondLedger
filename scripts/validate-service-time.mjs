@@ -30,7 +30,7 @@ import {
   TEN_AND_FIVE_CONSECUTIVE_YEARS,
 } from '../src/engine/serviceTime.js';
 import { createServiceRecord } from '../src/models/ServiceRecord.js';
-import { createPlayer, createRating } from '../src/models/Player.js';
+import { createPlayer, createRating, getAge } from '../src/models/Player.js';
 import { computeFreshSeason1State, advanceToNextSeason, STATE_SCHEMA_VERSION } from '../src/data/season.js';
 
 let failures = 0;
@@ -199,7 +199,7 @@ console.log('\n=== 7. advanceServiceTime: gap-filling, correct crediting per poo
 console.log('\n=== 8. Real data/season.js wiring: every org-affiliated player has a serviceRecord ===\n');
 {
   const state1 = computeFreshSeason1State();
-  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 22, `schemaVersion is the current STATE_SCHEMA_VERSION, 22 (got ${state1.schemaVersion})`);
+  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 23, `schemaVersion is the current STATE_SCHEMA_VERSION, 23 (got ${state1.schemaVersion})`);
 
   let totalPlayers = 0, missing = 0;
   for (const roster of state1.rosterByTeamId.values()) {
@@ -217,8 +217,25 @@ console.log('\n=== 8. Real data/season.js wiring: every org-affiliated player ha
   assert(missing === 0, `every org-affiliated player has a real serviceRecord, no gaps (got ${missing} missing)`);
 
   const sampleTeamId = [...state1.rosterByTeamId.keys()][0];
+  // §47 CHANGED THIS DELIBERATELY. Before the founding-generation bootstrap
+  // (engine/serviceTime.js's seedFoundingServiceTime), every season-1 player
+  // had exactly one season of service regardless of age — so a 37-year-old
+  // veteran read as a rookie, which made him price at the league minimum
+  // forever once salary keyed off real service time. Founders are now seeded
+  // from age, so the honest invariant is "one season PLUS whatever his age
+  // implies", and a real veteran must have strictly more than a rookie.
   const sampleActivePlayer = state1.rosterByTeamId.get(sampleTeamId).lineup[0];
-  assert(sampleActivePlayer.serviceRecord.mlbServiceDays === SERVICE_DAYS_PER_SEASON, `a season-1 active player has exactly one season of MLB days (got ${sampleActivePlayer.serviceRecord.mlbServiceDays})`);
+  assert(
+    sampleActivePlayer.serviceRecord.mlbServiceDays >= SERVICE_DAYS_PER_SEASON,
+    `a season-1 active player has at least the one season just credited (got ${sampleActivePlayer.serviceRecord.mlbServiceDays})`
+  );
+  const allSeason1 = [...state1.rosterByTeamId.values()].flatMap((r) => [...r.lineup, ...r.rotation, ...r.bullpen, ...r.bench]);
+  const oldest = allSeason1.reduce((a, b) => (getAge(a, state1.asOfDate) > getAge(b, state1.asOfDate) ? a : b));
+  const youngest = allSeason1.reduce((a, b) => (getAge(a, state1.asOfDate) < getAge(b, state1.asOfDate) ? a : b));
+  assert(
+    oldest.serviceRecord.mlbServiceDays > youngest.serviceRecord.mlbServiceDays,
+    `the league's oldest season-1 player has strictly more accrued service than its youngest (${oldest.serviceRecord.mlbServiceDays} vs ${youngest.serviceRecord.mlbServiceDays}) — the founding bootstrap, without which every founder reads as a rookie`
+  );
   assert(sampleActivePlayer.serviceRecord.firstProSeasonNumber === 1, 'a season-1 player has firstProSeasonNumber 1');
 }
 

@@ -456,7 +456,7 @@ export function LeagueStateProvider({ children }) {
   async function signEstablishedFreeAgent(playerId, teamId) {
     if (isSimulating) return null;
     const roster = state.rosterByTeamId.get(teamId);
-    const result = signEstablishedFreeAgentEngine(playerId, teamId, state.establishedFreeAgentPoolById, roster, state.asOfDate);
+    const result = signEstablishedFreeAgentEngine(playerId, teamId, state.establishedFreeAgentPoolById, roster);
     if (!result) return null;
     const rosterByTeamId = new Map(state.rosterByTeamId);
     rosterByTeamId.set(teamId, result.updatedRoster);

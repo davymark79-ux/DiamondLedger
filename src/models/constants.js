@@ -148,6 +148,32 @@ export const MINOR_LEAGUE_QUALITY_BANDS = Object.freeze({
   ROOKIE: [10, 30],
 });
 
+// Per-level age windows, [minAge, maxAgeExclusive] — the same convention as
+// playerGenerator.js's DEFAULT_ESTABLISHED_AGE_RANGE ([21, 38] = ages
+// 21-37), which every MLB-level caller keeps.
+//
+// Added in §47, fixing the root cause of a real, measured failure. §23
+// seeded every affiliate level from that same 21-37 MLB window and flagged
+// it ("nothing feeds Rookie/A ball with genuinely young 17-23-ish signees")
+// — harmless while salary keyed off age, but once §47 put salary on real
+// accrued service time it became load-bearing: the average call-up arrived
+// at ~29 with zero MLB service, met the retirement curve at 32-33, and
+// retired without ever reaching the 6-year free-agency threshold. League
+// payroll collapsed monotonically with no equilibrium through 18 measured
+// seasons (median $103.9M -> $32.4M, luxury tax dead, 37 of 50 clubs under
+// the floor, the MLB1/MLB2 payroll gap gone).
+//
+// These windows let a call-up arrive young enough to actually have a
+// career. Illustrative placeholders like every other constant here, but
+// anchored to real minor-league age profiles: Rookie ball is teenagers,
+// AAA is mostly mid-20s with a few older org veterans.
+export const MINOR_LEAGUE_AGE_RANGES = Object.freeze({
+  AAA: [22, 29],
+  AA: [21, 26],
+  A: [19, 24],
+  ROOKIE: [18, 22],
+});
+
 // Season lengths per level (minor-leagues.md), scaled off the majors' own
 // 150-game season the same way the doc derives them. Rookie's is a rough
 // placeholder shape (short, per rookie-league.md) — exact game count isn't

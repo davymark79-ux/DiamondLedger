@@ -66,10 +66,21 @@
 // theoretically shrink toward empty. Noted, not fixed — inventing a
 // replenishment mechanism wasn't asked for.
 
-import { sectionKeyForPosition, playerQualityScore } from './minorLeagues.js';
+import { sectionKeyForPosition, playerQualityScore, promoteAndBackfill } from './minorLeagues.js';
 import { rollRetirement } from './retirement.js';
 import { generateContractForPlayer } from './contracts.js';
+import { computeServiceYears, SERVICE_DAYS_PER_SEASON, FREE_AGENCY_SERVICE_YEARS } from './serviceTime.js';
 import { MINOR_LEAGUE_LEVELS_ORDER, MINOR_LEAGUE_QUALITY_BANDS, DEVELOPMENT_LEVELS } from '../models/constants.js';
+
+const ROSTER_SECTIONS = ['lineup', 'rotation', 'bullpen', 'bench'];
+
+// Share of players reaching free agency who re-sign with their own club
+// rather than reaching the open market. Without an incumbent advantage the
+// signing pass below (reverse-standings order, worst club picks first)
+// would funnel every star to the weakest clubs every single season — the
+// same reason engine/minorLeagueFreeAgency.js bounds its own exodus with a
+// "most re-sign with their own org" rate. Illustrative placeholder.
+export const FREE_AGENCY_RESIGN_PROBABILITY = 0.55;
 
 // ===== Amateur free agency (College + International, shared) =====
 
@@ -107,7 +118,7 @@ function assignSignedAmateurToAffiliate(player, teamId, level, affiliateRosterBy
   // correct context here, not a guess — matches exactly how
   // engine/contracts.js's own assignMissingContracts would classify him if
   // it encountered him at the next season boundary instead.
-  const contract = player.contract ?? generateContractForPlayer(player, 'MINORS_DEPTH', level, null);
+  const contract = player.contract ?? generateContractForPlayer(player, 'MINORS_DEPTH', level);
   const signedPlayer = { ...player, developmentLevel: DEVELOPMENT_LEVELS[level], teamId, contract };
   affiliateRosterByClubId.set(clubId, { ...roster, [sectionKey]: [...roster[sectionKey], signedPlayer] });
   return true;
@@ -170,11 +181,12 @@ export function candidatesForSigning(roster, sectionKey, position) {
  * @param {string} teamId
  * @param {Map<string, object>} establishedFreeAgentPoolById
  * @param {{lineup:object[], rotation:object[], bullpen:object[], bench:object[]}|undefined} roster - teamId's CURRENT roster object
- * @param {Date} [asOfDate] - in-game date (state.asOfDate), NOT wall-clock time — used for the signed player's age-based contract salary (engine/contracts.js)
+ * (No asOfDate any more: §47 moved contract salary off an age proxy onto
+ * real accrued service time, so nothing here needs the in-game date.)
  * @returns {{updatedRoster: object, releasedPlayerId: string, sectionKey: string}|null}
  *   null if playerId isn't in the pool, or no roster was passed — caller no-ops
  */
-export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentPoolById, roster, asOfDate = new Date()) {
+export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentPoolById, roster) {
   const player = establishedFreeAgentPoolById.get(playerId);
   if (!player || !roster) return null;
 
@@ -187,7 +199,7 @@ export function signEstablishedFreeAgent(playerId, teamId, establishedFreeAgentP
   // treats as sticky-once-assigned: this ALWAYS generates a fresh contract,
   // even if the player already carried a (now-stale) one from before he
   // hit the pool.
-  const contract = generateContractForPlayer(player, 'ACTIVE', null, asOfDate);
+  const contract = generateContractForPlayer(player, 'ACTIVE', null);
   const signedPlayer = { ...player, teamId, contract };
   const updatedRoster = {
     ...roster,
@@ -220,4 +232,154 @@ export function advanceEstablishedFreeAgentPool(establishedFreeAgentPoolById, rn
     }
   }
   return { retirements };
+}
+
+// ===== Free agency at 6 years (CLAUDE.md §47) =====
+
+/**
+ * Has this player JUST crossed the free-agency threshold this season?
+ *
+ * Deliberately a FLOW, not a stock: `>= 6 years now, < 6 years before this
+ * season's own credit`. Testing the stock instead would sweep every
+ * already-6+ player into free agency at once on the very first run
+ * (measured: ~770 of 1300 active players), which is absurd — and it would
+ * re-sweep the same players every season thereafter. Framing it as a flow
+ * also means NO new persisted field is needed to remember who has already
+ * been processed.
+ *
+ * The founding generation needs no special case: engine/serviceTime.js's
+ * seedFoundingServiceTime gives them high accrued service BEFORE their
+ * first contract is priced, so they are already on full-market deals
+ * (measured at season 1: 684 of 768 six-plus players already at market).
+ * @param {object} player
+ */
+export function hasJustReachedFreeAgency(player) {
+  const days = player.serviceRecord?.mlbServiceDays ?? 0;
+  return (
+    computeServiceYears(days) >= FREE_AGENCY_SERVICE_YEARS &&
+    computeServiceYears(days - SERVICE_DAYS_PER_SEASON) < FREE_AGENCY_SERVICE_YEARS
+  );
+}
+
+function bestPoolFitForSection(pool, sectionKey) {
+  let best = null;
+  for (const player of pool.values()) {
+    if (sectionKeyForPosition(player.primaryPosition) !== sectionKey) continue;
+    if (!best || playerQualityScore(player) > playerQualityScore(best)) best = player;
+  }
+  return best;
+}
+
+/**
+ * Season-boundary free agency — the mechanic engine/contracts.js's
+ * service-time pricing (§47) requires to be coherent, and the recurring
+ * inflow this file's own header flagged as missing ("real free agency's
+ * actual source, expiring contracts, has no analog in this codebase").
+ *
+ * Diagnosed before it was built: contracts are sticky (assignMissingContracts
+ * only fills `contract === null`, and only the 3-6yr arbitration sweep ever
+ * re-prices one), so nothing lifted a player to market value on reaching six
+ * years. Measured over 14 seasons, mean service time and mean leverage held
+ * flat while mean active-roster salary fell from $2.66M to $1.48M and league
+ * payroll collapsed with no equilibrium. This closes that loop.
+ *
+ * Three steps, in order:
+ *  1. Everyone who JUST crossed six years leaves his old deal. He either
+ *     re-signs in place at a fresh market-value contract
+ *     (FREE_AGENCY_RESIGN_PROBABILITY) or vacates his roster spot and
+ *     enters the open pool, also re-priced so his asking price is real.
+ *  2. Clubs refill, worst-record-first (engine/draft.js's own
+ *     reverse-standings convention, shared with waivers), taking the best
+ *     positional fit available in the pool.
+ *  3. Anything the pool cannot fill falls through to promoteAndBackfill —
+ *     MANDATORY, not optional. This removes players from active rosters, so
+ *     it carries exactly the depletion risk that shipped broken twice
+ *     (CLAUDE.md §34, §40); section sizes are captured BEFORE any removal
+ *     and restored to those exact counts, so no section can ever shrink.
+ *
+ * Mutates `rosterByTeamId`/`establishedFreeAgentPoolById`/
+ * `affiliateRosterByClubId` in place, the same ownership contract every
+ * other season-boundary sweep in this codebase uses.
+ * @param {object[]} teamsInWaiverOrder - worst record first
+ * @param {Map<string, object>} rosterByTeamId
+ * @param {Map<string, object>} establishedFreeAgentPoolById
+ * @param {Map<string, object>} affiliateRosterByClubId
+ * @param {() => number} rng
+ * @param {Date} asOfDate
+ * @returns {{reachedFreeAgency: number, reSigned: number, toMarket: number, signedFromPool: number, backfilled: number}}
+ */
+export function runFreeAgencySweep(teamsInWaiverOrder, rosterByTeamId, establishedFreeAgentPoolById, affiliateRosterByClubId, rng, asOfDate) {
+  let reachedFreeAgency = 0, reSigned = 0, toMarket = 0, signedFromPool = 0, backfilled = 0;
+
+  // Step 1 — departures and in-place re-signings.
+  const targetSizes = new Map();
+  for (const [teamId, roster] of rosterByTeamId) {
+    const sizes = {};
+    for (const key of ROSTER_SECTIONS) sizes[key] = roster[key].length;
+    targetSizes.set(teamId, sizes);
+
+    const updated = { ...roster };
+    for (const key of ROSTER_SECTIONS) {
+      const kept = [];
+      for (const player of roster[key]) {
+        if (!hasJustReachedFreeAgency(player)) { kept.push(player); continue; }
+        reachedFreeAgency++;
+        const repriced = { ...player, contract: generateContractForPlayer(player, 'ACTIVE', null) };
+        if (rng() < FREE_AGENCY_RESIGN_PROBABILITY) {
+          kept.push(repriced);
+          reSigned++;
+        } else {
+          establishedFreeAgentPoolById.set(player.id, { ...repriced, teamId: null });
+          toMarket++;
+        }
+      }
+      updated[key] = kept;
+    }
+    rosterByTeamId.set(teamId, updated);
+  }
+
+  // Steps 2 and 3 — refill every section back to its pre-sweep size.
+  for (const team of teamsInWaiverOrder) {
+    const roster = rosterByTeamId.get(team.id);
+    if (!roster) continue;
+    const sizes = targetSizes.get(team.id);
+    const updated = { ...roster };
+
+    for (const key of ROSTER_SECTIONS) {
+      while (updated[key].length < sizes[key]) {
+        const signing = bestPoolFitForSection(establishedFreeAgentPoolById, key);
+        if (signing) {
+          establishedFreeAgentPoolById.delete(signing.id);
+          // A pool player may legitimately carry NO contract — the season-1
+          // pool is seeded from realLeague.js's `freeAgents`, which
+          // assignMissingContracts never walks (it only covers rosters and
+          // affiliates). Signing him onto an active roster without one
+          // would leave him unpaid for a season.
+          updated[key] = [...updated[key], {
+            ...signing,
+            teamId: team.id,
+            contract: signing.contract ?? generateContractForPlayer(signing, 'ACTIVE', null),
+          }];
+          signedFromPool++;
+          continue;
+        }
+        // Pool exhausted for this section — fall back to the org's own
+        // call-up cascade rather than leaving a hole (the §34/§40 lesson).
+        const position = updated[key][0]?.primaryPosition ?? 'RP';
+        const calledUp = promoteAndBackfill(team, position, affiliateRosterByClubId, rng, asOfDate);
+        if (!calledUp) break; // genuinely nothing anywhere — degrade gracefully
+        // This sweep runs AFTER engine/contracts.js's assignMissingContracts
+        // for the season, so anyone it introduces would otherwise carry
+        // `contract: null` (promoteAndBackfill can generate a fresh player
+        // from thin air) or a stale MINORS deal, and go a whole season
+        // unpaid. Caught by validate:contracts' population-wide
+        // "no player is missing a contract" check — 28 real gaps.
+        updated[key] = [...updated[key], { ...calledUp, contract: generateContractForPlayer(calledUp, 'ACTIVE', null) }];
+        backfilled++;
+      }
+    }
+    rosterByTeamId.set(team.id, updated);
+  }
+
+  return { reachedFreeAgency, reSigned, toMarket, signedFromPool, backfilled };
 }

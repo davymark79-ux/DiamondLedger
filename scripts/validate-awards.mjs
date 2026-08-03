@@ -201,7 +201,7 @@ console.log('\n=== 7. Real season: full slate, per league, plausible winners ===
   assert(mvp.voteShare > 0.5 && mvp.voteShare < 1, `and won a real contested vote (${(mvp.voteShare * 100).toFixed(0)}%)`);
 
   assert(s.writersCorps.length > 0, 'the Writers Corps is genuinely in live state now, not just the offline pipeline');
-  assert(s.schemaVersion === 22, `schemaVersion is the current STATE_SCHEMA_VERSION, 22 (got ${s.schemaVersion})`);
+  assert(s.schemaVersion === 23, `schemaVersion is the current STATE_SCHEMA_VERSION, 23 (got ${s.schemaVersion})`);
 
   // Multi-season: history accumulates and naming eventually fires.
   let named = 0;

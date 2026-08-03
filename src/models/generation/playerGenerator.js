@@ -184,16 +184,34 @@ function generateBirthdate(rng, asOfDate) {
 }
 
 // Same window-based approach as generateBirthdate(), but for an established
-// active-roster player's realistic career-age span (21-37) rather than a
-// fixed HS/pre-draft age. Uniform across the span — a placeholder, like
+// active-roster player's realistic career-age span rather than a fixed
+// HS/pre-draft age. Uniform across the span — a placeholder, like
 // everything else here; a real age curve would skew younger.
-function generateEstablishedBirthdate(rng, asOfDate) {
+//
+// `ageRange` is [minAge, maxAgeExclusive], so the default [21, 38] produces
+// ages 21-37 — exactly the window this hardcoded before §47, which is why
+// every caller that doesn't pass one (rosterSeed.js's MLB rosters and free
+// agents, leagueProgression.js's thin-air replacement) is unchanged.
+//
+// §47 made this a parameter because the single shared 21-37 window turned
+// out to be load-bearing in a way §23 flagged but could not yet see the
+// consequence of: it applied to AFFILIATE rosters too, so the average
+// call-up arrived at ~29 with zero MLB service, hit the retirement curve
+// at 32-33, and retired having never reached the 6-year free-agency
+// threshold. Harmless while salary keyed off age; once salary keyed off
+// real accrued service (§47), it drove league payroll into a monotonic
+// collapse — measured, no equilibrium through 18 seasons.
+export const DEFAULT_ESTABLISHED_AGE_RANGE = Object.freeze([21, 38]);
+
+function generateEstablishedBirthdate(rng, asOfDate, ageRange = DEFAULT_ESTABLISHED_AGE_RANGE) {
+  const [minAge, maxAgeExclusive] = ageRange;
+
   const youngestBoundary = new Date(asOfDate);
-  youngestBoundary.setFullYear(youngestBoundary.getFullYear() - 21); // turns 21 today
+  youngestBoundary.setFullYear(youngestBoundary.getFullYear() - minAge); // turns minAge today
 
   const oldestBoundary = new Date(asOfDate);
-  oldestBoundary.setFullYear(oldestBoundary.getFullYear() - 38);
-  oldestBoundary.setDate(oldestBoundary.getDate() + 1); // one day short of turning 38
+  oldestBoundary.setFullYear(oldestBoundary.getFullYear() - maxAgeExclusive);
+  oldestBoundary.setDate(oldestBoundary.getDate() + 1); // one day short of maxAgeExclusive
 
   const birthTime = randomInRange(rng, oldestBoundary.getTime(), youngestBoundary.getTime());
   return new Date(birthTime).toISOString().slice(0, 10);
@@ -263,7 +281,10 @@ export function generatePlayers(count, options = {}) {
 }
 
 /**
- * Generates an already-established, active-roster-ready Player — age 21-37,
+ * Generates an already-established, active-roster-ready Player — age 21-37
+ * by default (override via `options.ageRange`, which affiliate seeding uses
+ * to produce genuinely level-appropriate ages — see
+ * DEFAULT_ESTABLISHED_AGE_RANGE),
  * developmentLevel MLB, current ratings realized to 85-100% of true
  * potential (an arrived pro, not a raw prospect). Unlike generatePlayer(),
  * `position` is a required, explicit choice rather than a random draw from
@@ -298,7 +319,7 @@ export function generateEstablishedPlayer(options = {}) {
   return createPlayer({
     firstName: pick(rng, FIRST_NAMES_USA),
     lastName: pick(rng, LAST_NAMES_USA),
-    birthdate: generateEstablishedBirthdate(rng, asOfDate),
+    birthdate: generateEstablishedBirthdate(rng, asOfDate, options.ageRange),
     birthNation,
     heritageNations: pickHeritageNations(rng, birthNation),
     bats: pickBats(rng),

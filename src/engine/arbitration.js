@@ -47,8 +47,15 @@
 // lists arbitration thresholds among the negotiable terms).
 
 import { playerQualityScore, promoteAndBackfill } from './minorLeagues.js';
-import { MLB_MIN_SALARY, MLB_MAX_SALARY, SALARY_QUALITY_EXPONENT } from './contracts.js';
-import { computeServiceYears, isArbitrationEligible, ARBITRATION_START_SERVICE_YEARS, FREE_AGENCY_SERVICE_YEARS } from './serviceTime.js';
+import {
+  MLB_MIN_SALARY,
+  MLB_MAX_SALARY,
+  SALARY_QUALITY_EXPONENT,
+  computeServiceTimeLeverage,
+  ARBITRATION_LEVERAGE_FLOOR as CANONICAL_LEVERAGE_FLOOR,
+  ARBITRATION_LEVERAGE_CEILING as CANONICAL_LEVERAGE_CEILING,
+} from './contracts.js';
+import { isArbitrationEligible } from './serviceTime.js';
 import { RATING_SCALE } from '../models/constants.js';
 
 const ROSTER_SECTIONS = ['lineup', 'rotation', 'bullpen', 'bench'];
@@ -87,8 +94,12 @@ export const NON_TENDER_VALUE_RATIO = 1.5;
 // value across the three arb years, and porting that shape is load-bearing
 // here, not cosmetic: see the calibration note on
 // computeArbitrationMarketValue.
-export const ARBITRATION_LEVERAGE_FLOOR = 0.4;
-export const ARBITRATION_LEVERAGE_CEILING = 0.9;
+// Re-exported from engine/contracts.js, which owns the canonical curve as
+// of §47 (it has to live there: this file already imports from contracts.js,
+// so defining it here would create a cycle). Kept under these names so
+// every existing importer — validate:arb among them — is unaffected.
+export const ARBITRATION_LEVERAGE_FLOOR = CANONICAL_LEVERAGE_FLOOR;
+export const ARBITRATION_LEVERAGE_CEILING = CANONICAL_LEVERAGE_CEILING;
 
 // ===== Market value =====
 
@@ -134,11 +145,13 @@ export function computeArbitrationMarketValue(player) {
   const qualityFraction = Math.min(1, Math.max(0, (quality - RATING_SCALE.MIN) / (RATING_SCALE.MAX - RATING_SCALE.MIN)));
   const fullMarketValue = MLB_MIN_SALARY + qualityFraction ** SALARY_QUALITY_EXPONENT * (MLB_MAX_SALARY - MLB_MIN_SALARY);
 
-  // Real accrued service, not age.
-  const years = computeServiceYears(player.serviceRecord?.mlbServiceDays ?? 0);
-  const windowSpan = FREE_AGENCY_SERVICE_YEARS - ARBITRATION_START_SERVICE_YEARS;
-  const windowFraction = Math.min(1, Math.max(0, (years - ARBITRATION_START_SERVICE_YEARS) / windowSpan));
-  const leverage = ARBITRATION_LEVERAGE_FLOOR + windowFraction * (ARBITRATION_LEVERAGE_CEILING - ARBITRATION_LEVERAGE_FLOOR);
+  // Real accrued service, not age — via engine/contracts.js's canonical
+  // curve. This used to be an inline copy of the same 3-6 window ramp;
+  // §47 made contracts.js key base salary off the identical curve, so
+  // duplicating it here would be two definitions free to drift apart.
+  // (Only ever called for arbitration-eligible players, so the curve's
+  // pre-arb and free-agent branches are unreachable from here.)
+  const leverage = computeServiceTimeLeverage(player.serviceRecord);
 
   return Math.round(MLB_MIN_SALARY + leverage * (fullMarketValue - MLB_MIN_SALARY));
 }

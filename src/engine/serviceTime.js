@@ -50,6 +50,23 @@ export const MINOR_LEAGUE_FREE_AGENCY_SEASONS = 7;
 export const TEN_AND_FIVE_TOTAL_YEARS = 10;
 export const TEN_AND_FIVE_CONSECUTIVE_YEARS = 5;
 
+// Founding-generation bootstrap (CLAUDE.md §47). Service time accrues from
+// LEAGUE start, not career start — so without this, a 37-year-old on a
+// season-1 roster reads as having 1 year of service, identical to a
+// 21-year-old rookie. That was harmless while salary ran on an age proxy,
+// but the moment salary keys off real service time it makes the entire
+// founding generation permanently underpaid: they retire around seasons
+// 3-5 having never reached the 6-year free-agency threshold. It also
+// already distorted free-agency eligibility, arbitration, and 10-and-5
+// rights for that generation, silently, since §37.
+//
+// Assumed major-league debut age. A founding player older than this is
+// treated as having been in the majors continuously since then — a real
+// simplification (it ignores late bloomers and time spent in the minors),
+// flagged rather than modelled, because nothing in this engine records a
+// pre-league-start career history to draw from.
+export const ASSUMED_MLB_DEBUT_AGE = 23;
+
 // ===== Eligibility math =====
 
 /**
@@ -196,6 +213,104 @@ function creditMinorsSeason(player) {
       minorsSeasonsAccrued: player.serviceRecord.minorsSeasonsAccrued + 1,
     },
   };
+}
+
+/**
+ * One-time founding-generation bootstrap — see ASSUMED_MLB_DEBUT_AGE.
+ *
+ * Runs ONCE, at league start, and only over the active MLB rosters. It must
+ * run BEFORE engine/contracts.js's assignMissingContracts, since that is
+ * what prices every founding contract and is sticky-once-assigned — seeding
+ * afterwards would leave the whole founding generation on league-minimum
+ * deals forever.
+ *
+ * **Deliberately scoped to active rosters, not affiliate rosters.** Seeding
+ * `minorsSeasonsAccrued` from age too would immediately flip large numbers
+ * of affiliate players past the Rule 5 exposure threshold
+ * (isRule5Exposed) and the minor-league free-agency threshold
+ * (isMinorLeagueFreeAgent), firing a mass Rule 5 draft and a mass exodus in
+ * the first offseason. That is a much larger behavioural change than this
+ * phase is making, and affiliate players carrying no accrued history is
+ * already the shipped status quo — it is only the MLB side that salary now
+ * keys off. Left as named follow-up work.
+ *
+ * Never overwrites real accrued history: a player who already has
+ * mlbServiceDays > 0 is returned untouched, so this is safe to call more
+ * than once and cannot corrupt an in-progress league.
+ * @param {Map<string, object>} rosterByTeamId - mutated in place, same
+ *   ownership contract as advanceServiceTime below.
+ * @param {number} currentSeasonNumber
+ * @param {Date} asOfDate
+ */
+export function seedFoundingServiceTime(rosterByTeamId, currentSeasonNumber, asOfDate) {
+  for (const [teamId, roster] of rosterByTeamId) {
+    const updated = { ...roster };
+    for (const sectionKey of ROSTER_SECTIONS) {
+      updated[sectionKey] = roster[sectionKey].map((p) => {
+        const withRecord = ensureServiceRecord(p, currentSeasonNumber, asOfDate);
+        if (withRecord.serviceRecord.mlbServiceDays > 0) return withRecord;
+
+        const age = getAge(p, asOfDate) ?? ASSUMED_MLB_DEBUT_AGE;
+        const years = Math.max(0, age - ASSUMED_MLB_DEBUT_AGE);
+        return {
+          ...withRecord,
+          serviceRecord: {
+            ...withRecord.serviceRecord,
+            mlbServiceDays: years * SERVICE_DAYS_PER_SEASON,
+            // A founder with real major-league time was necessarily on a
+            // 50-man roster to accrue it.
+            wasEverProtected: years > 0 ? true : withRecord.serviceRecord.wasEverProtected,
+            // ensureServiceRecord stamps ageAtSigning as the player's age
+            // TODAY, which for a 30-year-old founder claims he signed at 30.
+            // Clamp it to the assumed debut age so the record is internally
+            // coherent (a 21-year-old keeps his real, younger age).
+            ageAtSigning: Math.min(age, ASSUMED_MLB_DEBUT_AGE),
+          },
+        };
+      });
+    }
+    rosterByTeamId.set(teamId, updated);
+  }
+}
+
+/**
+ * Gap-fill ONLY — creates a ServiceRecord for anyone missing one, and
+ * credits nobody.
+ *
+ * Deliberately separate from advanceServiceTime below, which is a running
+ * counter: calling that one a second time in a season would credit the
+ * entire league a phantom extra year. Several late-stage season-boundary
+ * mechanics (arbitration's non-tender backfill, the Rule 5 draft, minor-
+ * league free agency, and §47's free-agency sweep) introduce brand-new
+ * players AFTER advanceServiceTime has already run, via promoteAndBackfill,
+ * whose cascade can generate a fresh player from thin air. Those players
+ * would otherwise carry `serviceRecord: null` — the exact mirror of the
+ * contract gap engine/contracts.js's second assignMissingContracts pass
+ * closes, and caught the same way, by validate:servicetime's
+ * population-wide "no player is missing a record" check.
+ * @param {Map<string, object>} rosterByTeamId - mutated in place
+ * @param {Map<string, object>} affiliateRosterByClubId - mutated in place
+ * @param {number} currentSeasonNumber
+ * @param {Date} asOfDate
+ * @returns {{filled: number}}
+ */
+export function backfillMissingServiceRecords(rosterByTeamId, affiliateRosterByClubId, currentSeasonNumber, asOfDate) {
+  let filled = 0;
+  const fill = (roster) => {
+    const updated = { ...roster };
+    for (const sectionKey of ROSTER_SECTIONS) {
+      updated[sectionKey] = (roster[sectionKey] ?? []).map((p) => {
+        if (p.serviceRecord) return p;
+        filled++;
+        return ensureServiceRecord(p, currentSeasonNumber, asOfDate);
+      });
+    }
+    return updated;
+  };
+
+  for (const [teamId, roster] of rosterByTeamId) rosterByTeamId.set(teamId, fill(roster));
+  for (const [clubId, roster] of affiliateRosterByClubId) affiliateRosterByClubId.set(clubId, fill(roster));
+  return { filled };
 }
 
 /**

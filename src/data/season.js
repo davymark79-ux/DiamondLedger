@@ -40,7 +40,7 @@ import { advanceOffseason } from '../engine/leagueProgression.js';
 import { simulateMinorLeagueSeasons } from '../engine/minorLeagues.js';
 import { computePromotionRelegationSwaps, applyPromotionRelegationSwaps, applyDivisionSwaps } from '../engine/promotionRelegation.js';
 import { simulatePlayoffs } from '../engine/playoffs.js';
-import { computeDraftOrder, buildDraftPicks } from '../engine/draft.js';
+import { computeDraftOrder, buildDraftPicks, computeCombinedReverseStandingsOrder } from '../engine/draft.js';
 import { generateHsClass, seedInitialCollegePopulation, runCollegePathway } from '../engine/college.js';
 import {
   seedInitialAcademyPopulation,
@@ -49,7 +49,7 @@ import {
   buildInternationalDraftPicks,
   runInternationalPathway,
 } from '../engine/internationalAcademy.js';
-import { advanceEstablishedFreeAgentPool } from '../engine/freeAgency.js';
+import { advanceEstablishedFreeAgentPool, runFreeAgencySweep } from '../engine/freeAgency.js';
 import {
   createInitialQuotientByTeamId,
   decayQuotientsForNewSeason,
@@ -63,7 +63,7 @@ import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '..
 import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayers, incrementOptionYearsUsed } from '../engine/taxiSquad.js';
 import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
 import { assignMissingContracts } from '../engine/contracts.js';
-import { advanceServiceTime } from '../engine/serviceTime.js';
+import { advanceServiceTime, seedFoundingServiceTime, backfillMissingServiceRecords } from '../engine/serviceTime.js';
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
 import { runMinorLeagueFreeAgencySweep, advanceMinorLeagueFreeAgentPool } from '../engine/minorLeagueFreeAgency.js';
@@ -149,7 +149,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 22;
+export const STATE_SCHEMA_VERSION = 23;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -487,7 +487,15 @@ export function computeFreshSeason1State() {
   // single sweep here is enough: it never overwrites an existing
   // contract, so anyone already assigned earlier this function — none yet,
   // season 1 starts from scratch — is left untouched).
-  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, asOfDate);
+  // §47 — the founding generation's service time, backfilled from age.
+  // MUST run BEFORE assignMissingContracts: service time accrues from
+  // league start, so without this every season-1 player (a 37-year-old
+  // veteran included) has zero accrued service at the moment his contract
+  // is priced, and contracts are sticky-once-assigned — the whole founding
+  // generation would sit on league-minimum deals permanently.
+  seedFoundingServiceTime(rosterByTeamId, 1, asOfDate);
+
+  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId);
 
   // 50-man Roster System, Phase 4 — credits every org-affiliated player a
   // full season of service (see engine/serviceTime.js's own header for
@@ -526,6 +534,10 @@ export function computeFreshSeason1State() {
     // Same "nothing to evaluate yet" shape: minor-league free agency needs
     // 7 accrued minor-league seasons, and season 1 credits the first.
     playerRightsResult: { minorLeagueFreeAgents: [], minorLeagueFreeAgentsEligible: 0, minorLeagueFreeAgentsRetired: 0 },
+    // §47 — nobody can reach six years of service until seasons have been
+    // played, so season 1 has nothing to sweep (same "nothing to evaluate
+    // yet" shape as promotionRelegationSwaps/arbitrationResult).
+    freeAgencyResult: { reachedFreeAgency: 0, reSigned: 0, toMarket: 0, signedFromPool: 0, backfilled: 0 },
     minorLeagueFreeAgentPoolById: new Map(),
     playoffResult,
     seasonResult,
@@ -809,7 +821,7 @@ export function advanceToNextSeason(state) {
   // already produced every new player who needs one. Never overwrites an
   // existing contract (see engine/contracts.js's own header) — every
   // player who already had one before this transition keeps it unchanged.
-  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, state.affiliateRosterByClubId, asOfDate);
+  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, state.affiliateRosterByClubId);
 
   // 50-man Roster System, Phase 4 — credits everyone a season of service
   // for the season that just ran. Uses `rosterByTeamId` (advanceOffseason's
@@ -869,6 +881,54 @@ export function advanceToNextSeason(state) {
     minorLeagueFreeAgentsRetired: minorLeagueFaRetirements.retired,
   };
 
+  // §47 — MLB free agency at six years of service. Runs AFTER
+  // advanceServiceTime (so "just crossed six years" reflects the season
+  // just credited) and after arbitration (a player crossing into free
+  // agency is no longer arbitration-eligible, so the two never both act on
+  // him in the same offseason). Worst-record-first, reusing the same
+  // reverse-standings convention as the draft and waivers.
+  const freeAgencyOrder = computeCombinedReverseStandingsOrder(teamsForNextSeason, seasonResult.standingsById)
+    .map((id) => teamsForNextSeason.find((t) => t.id === id))
+    .filter(Boolean);
+  const freeAgencyResult = runFreeAgencySweep(
+    freeAgencyOrder,
+    rosterByTeamId,
+    state.establishedFreeAgentPoolById,
+    state.affiliateRosterByClubId,
+    rng,
+    asOfDate
+  );
+
+  // A SECOND contract sweep, deliberately. Several late-stage mechanics
+  // introduce brand-new players AFTER the main assignMissingContracts call
+  // above — arbitration's non-tender backfill, the Rule 5 draft, minor-
+  // league free agency, and §47's own free-agency sweep all call
+  // promoteAndBackfill, whose cascade can generate a fresh player from thin
+  // air at the bottom level. Those players would otherwise go a whole
+  // season with `contract: null`. Safe to run twice: assignMissingContracts
+  // is sticky-once-assigned, so this only ever fills genuine gaps and never
+  // re-prices anyone. Caught by validate:contracts' population-wide check.
+  assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, state.affiliateRosterByClubId);
+
+  // ...and the same for service records, for exactly the same reason: those
+  // late-stage backfills can arrive with `serviceRecord: null` too. This
+  // must NOT be another advanceServiceTime call — that one is a running
+  // counter and would double-credit the entire league a second season.
+  backfillMissingServiceRecords(rosterByTeamId, state.affiliateRosterByClubId, seasonNumber, asOfDate);
+
+  // The free-agency sweep moves players between active rosters, the pool,
+  // and (via promoteAndBackfill) the affiliate system — all AFTER the
+  // reserve/taxi lists above were revalidated, which can leave a protected
+  // id pointing at someone no longer on that club's AAA/AA roster.
+  // Re-running the revalidation is the fix; it is idempotent by design
+  // (drops stale ids, tops back up to 24) and consumes no rng.
+  const reserveRosterAfterFreeAgency = new Map(
+    teamsForNextSeason.map((t) => [
+      t.id,
+      revalidateAndTopUpReserveRoster(t.id, reserveRosterByTeamId.get(t.id) ?? [], state.affiliateRosterByClubId),
+    ])
+  );
+
   // Awards — the electorate ages and turns over first (retirement +
   // same-city replacement, reusing engine/leagueProgression.js's own
   // advanceWritersCorps rather than duplicating it), then votes.
@@ -896,6 +956,7 @@ export function advanceToNextSeason(state) {
     arbitrationResult,
     rule5Result,
     playerRightsResult,
+    freeAgencyResult,
     minorLeagueFreeAgentPoolById: state.minorLeagueFreeAgentPoolById,
     writersCorps,
     awardsResult: awardsThisSeason.awardsResult,
@@ -923,7 +984,7 @@ export function advanceToNextSeason(state) {
     establishedFreeAgentPoolById: state.establishedFreeAgentPoolById,
     quotientByTeamId,
     cupState,
-    reserveRosterByTeamId,
+    reserveRosterByTeamId: reserveRosterAfterFreeAgency,
     taxiRosterByTeamId,
     schemaVersion: STATE_SCHEMA_VERSION,
   };

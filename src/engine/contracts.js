@@ -15,12 +15,17 @@
 // rng plumbing at all.
 //
 // Real MLB salary structure is driven by service time (pre-arb minimum,
-// arbitration years, free-agent value) — but Service Time is Phase 4, not
-// built yet. computeServiceTimeProxyFraction below is an explicitly
-// flagged AGE-based proxy standing in for that, same status as
-// engine/retirement.js's own age/decline proxy standing in for a still-
-// unbuilt Scouts system. Phase 4 is expected to replace this proxy with a
-// real day-accrual signal; not attempted here.
+// arbitration years, free-agent value). From §36 until §47 this file stood
+// that up on an explicitly-flagged AGE-based proxy, because Service Time
+// did not exist yet. It does now (§37), and as of §47 salary keys off REAL
+// accrued service — see computeServiceTimeLeverage below, which is also the
+// canonical curve engine/arbitration.js consumes, so the two cannot drift.
+//
+// That change required a companion fix, since service time accrues from
+// LEAGUE start rather than career start: engine/serviceTime.js's
+// seedFoundingServiceTime backfills the founding generation from age at
+// league start. Without it every season-1 veteran reads as a rookie and
+// prices at the league minimum forever.
 //
 // All dollar figures are placeholders needing real playtesting/calibration
 // — same tuning status as every other numeric constant in this project
@@ -29,7 +34,7 @@
 
 import { playerQualityScore } from './minorLeagues.js';
 import { eligiblePlayersForTeam } from './rosterProtection.js';
-import { getAge } from '../models/Player.js';
+import { computeServiceYears, ARBITRATION_START_SERVICE_YEARS, FREE_AGENCY_SERVICE_YEARS } from './serviceTime.js';
 import { createContract, CONTRACT_TYPES } from '../models/Contract.js';
 import { RATING_SCALE, MINOR_LEAGUE_LEVELS_ORDER } from '../models/constants.js';
 
@@ -137,20 +142,47 @@ export const SALARY_FLOOR = 37_000_000;
 export const LUXURY_TAX_THRESHOLD = 90_000_000;
 export const LUXURY_TAX_RATE = 0.20;
 
-// ===== Service-time proxy (Phase 4 will replace this) =====
-
-const SERVICE_RAMP_START_AGE = 20;
-const SERVICE_RAMP_END_AGE = 28;
+// ===== Service-time leverage (CLAUDE.md §47) =====
+//
+// This replaced an age-based proxy (`computeServiceTimeProxyFraction`,
+// a 20->28 linear ramp) that stood in for real service time from §36 until
+// §47. This file's own header used to say "Phase 4 is expected to replace
+// this proxy with a real day-accrual signal" — §37 built the accrual, §40
+// used it for arbitration only, and this is where base salary finally
+// follows.
+//
+// Deliberately the CANONICAL curve for the whole codebase, not a second
+// opinion: engine/arbitration.js's computeArbitrationMarketValue used to
+// inline its own copy of the 3-6 window ramp, and now imports this instead,
+// so the two can no longer drift apart. (Direction matters — arbitration.js
+// already imports from this file, so the shared curve has to live here;
+// putting it in arbitration.js would create a cycle.)
+//
+// Mirrors real MLB's three regimes, and the CLIFFS between them are real,
+// not artefacts: a player at the league minimum jumps sharply on reaching
+// arbitration, and jumps again on reaching free agency.
+//
+//   < 3 years   pre-arbitration    -> 0    (exactly MLB_MIN_SALARY)
+//   3-6 years   arbitration window -> 0.4 rising to 0.9
+//   >= 6 years  free agency        -> 1    (full open-market value)
+export const PRE_ARBITRATION_LEVERAGE = 0;
+export const ARBITRATION_LEVERAGE_FLOOR = 0.4;
+export const ARBITRATION_LEVERAGE_CEILING = 0.9;
+export const FREE_AGENT_LEVERAGE = 1;
 
 /**
- * @param {number} age
- * @returns {number} 0 at/below SERVICE_RAMP_START_AGE, 1 at/above
- *   SERVICE_RAMP_END_AGE, linear in between.
+ * @param {import('../models/ServiceRecord.js').ServiceRecord|null} serviceRecord
+ * @returns {number} 0-1. A missing record reads as zero accrued service
+ *   (an amateur/unsigned player), which prices at the league minimum —
+ *   the correct floor, not a crash.
  */
-export function computeServiceTimeProxyFraction(age) {
-  if (age <= SERVICE_RAMP_START_AGE) return 0;
-  if (age >= SERVICE_RAMP_END_AGE) return 1;
-  return (age - SERVICE_RAMP_START_AGE) / (SERVICE_RAMP_END_AGE - SERVICE_RAMP_START_AGE);
+export function computeServiceTimeLeverage(serviceRecord) {
+  const years = computeServiceYears(serviceRecord?.mlbServiceDays ?? 0);
+  if (years < ARBITRATION_START_SERVICE_YEARS) return PRE_ARBITRATION_LEVERAGE;
+  if (years >= FREE_AGENCY_SERVICE_YEARS) return FREE_AGENT_LEVERAGE;
+  const windowFraction =
+    (years - ARBITRATION_START_SERVICE_YEARS) / (FREE_AGENCY_SERVICE_YEARS - ARBITRATION_START_SERVICE_YEARS);
+  return ARBITRATION_LEVERAGE_FLOOR + windowFraction * (ARBITRATION_LEVERAGE_CEILING - ARBITRATION_LEVERAGE_FLOOR);
 }
 
 // ===== Salary formulas =====
@@ -160,16 +192,18 @@ export function computeServiceTimeProxyFraction(age) {
  * — a BOTH contract is simplified to the same formula as a real MLB deal,
  * flagged: a true split-contract distinction (a lower rate while actually
  * optioned to the minors) is Phase 5/7 territory, not this phase's job.
+ * Now keyed off REAL accrued service time rather than age (§47), so a
+ * 30-year-old journeyman with three years of service is priced like the
+ * arbitration-window player he is, not like a free agent.
  * @param {object} player - Player
- * @param {Date} asOfDate
  * @returns {number} whole dollars, between MLB_MIN_SALARY and MLB_MAX_SALARY
  */
-export function generateMajorsStyleSalary(player, asOfDate) {
+export function generateMajorsStyleSalary(player) {
   const quality = playerQualityScore(player);
   const qualityFraction = Math.min(1, Math.max(0, (quality - RATING_SCALE.MIN) / (RATING_SCALE.MAX - RATING_SCALE.MIN)));
   const marketValue = MLB_MIN_SALARY + qualityFraction ** SALARY_QUALITY_EXPONENT * (MLB_MAX_SALARY - MLB_MIN_SALARY);
-  const serviceFraction = computeServiceTimeProxyFraction(getAge(player, asOfDate));
-  return Math.round(MLB_MIN_SALARY + serviceFraction * (marketValue - MLB_MIN_SALARY));
+  const leverage = computeServiceTimeLeverage(player.serviceRecord);
+  return Math.round(MLB_MIN_SALARY + leverage * (marketValue - MLB_MIN_SALARY));
 }
 
 /**
@@ -190,12 +224,12 @@ export function generateMinorsSalary(player, level) {
  * @param {Date} asOfDate
  * @returns {import('../models/Contract.js').Contract}
  */
-export function generateContractForPlayer(player, context, level, asOfDate) {
+export function generateContractForPlayer(player, context, level) {
   if (context === 'ACTIVE') {
-    return createContract({ type: CONTRACT_TYPES.MAJORS, annualSalary: generateMajorsStyleSalary(player, asOfDate), guaranteed: true });
+    return createContract({ type: CONTRACT_TYPES.MAJORS, annualSalary: generateMajorsStyleSalary(player), guaranteed: true });
   }
   if (context === 'RESERVE_TAXI') {
-    return createContract({ type: CONTRACT_TYPES.BOTH, annualSalary: generateMajorsStyleSalary(player, asOfDate), guaranteed: true });
+    return createContract({ type: CONTRACT_TYPES.BOTH, annualSalary: generateMajorsStyleSalary(player), guaranteed: true });
   }
   return createContract({ type: CONTRACT_TYPES.MINORS, annualSalary: generateMinorsSalary(player, level), guaranteed: false });
 }
@@ -223,13 +257,13 @@ export function generateContractForPlayer(player, context, level, asOfDate) {
  * @param {Date} asOfDate
  * @returns {{assigned: number}}
  */
-export function assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId, asOfDate) {
+export function assignMissingContracts(rosterByTeamId, reserveRosterByTeamId, affiliateRosterByClubId) {
   let assigned = 0;
 
   function withContract(player, context, level) {
     if (player.contract) return player;
     assigned++;
-    return { ...player, contract: generateContractForPlayer(player, context, level, asOfDate) };
+    return { ...player, contract: generateContractForPlayer(player, context, level) };
   }
 
   for (const [teamId, roster] of rosterByTeamId) {
