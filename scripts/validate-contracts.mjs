@@ -225,7 +225,7 @@ console.log('\n=== 6. computeTeamPayroll / computeLuxuryTaxOwed: hand-computed f
 console.log('\n=== 7. Real data/season.js wiring: every player has a contract, season-1 payroll re-derives correctly ===\n');
 {
   const state1 = computeFreshSeason1State();
-  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 23, `schemaVersion is the current STATE_SCHEMA_VERSION, 23 (got ${state1.schemaVersion})`);
+  assert(state1.schemaVersion === STATE_SCHEMA_VERSION && STATE_SCHEMA_VERSION === 24, `schemaVersion is the current STATE_SCHEMA_VERSION, 24 (got ${state1.schemaVersion})`);
 
   let totalPlayers = 0;
   let missing = 0;

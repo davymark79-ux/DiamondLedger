@@ -67,6 +67,7 @@ import { advanceServiceTime, seedFoundingServiceTime, backfillMissingServiceReco
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
 import { runMinorLeagueFreeAgencySweep, advanceMinorLeagueFreeAgentPool } from '../engine/minorLeagueFreeAgency.js';
+import { runMeritPromotions } from '../engine/meritPromotion.js';
 import { runSeasonAwards } from '../engine/awards.js';
 import { resolveAwardNaming, awardSlotKey } from '../engine/awardNaming.js';
 import { advanceWritersCorps } from '../engine/leagueProgression.js';
@@ -149,7 +150,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 23;
+export const STATE_SCHEMA_VERSION = 24;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -538,6 +539,8 @@ export function computeFreshSeason1State() {
     // played, so season 1 has nothing to sweep (same "nothing to evaluate
     // yet" shape as promotionRelegationSwaps/arbitrationResult).
     freeAgencyResult: { reachedFreeAgency: 0, reSigned: 0, toMarket: 0, signedFromPool: 0, backfilled: 0 },
+    // §48 — no season has been played yet, so nobody has outgrown a level.
+    meritPromotionResult: { promotedToMlb: 0, promotedWithinMinors: 0 },
     minorLeagueFreeAgentPoolById: new Map(),
     playoffResult,
     seasonResult,
@@ -916,6 +919,12 @@ export function advanceToNextSeason(state) {
   // counter and would double-credit the entire league a second season.
   backfillMissingServiceRecords(rosterByTeamId, state.affiliateRosterByClubId, seasonNumber, asOfDate);
 
+  // §48 — merit promotion: the best available player in each org climbs,
+  // 1-for-1, so talent reaches the majors on merit rather than only when
+  // somebody retires. Runs BEFORE the reserve re-validation below, since it
+  // moves players between the active roster and AAA.
+  const meritResult = runMeritPromotions(teamsForNextSeason, rosterByTeamId, state.affiliateRosterByClubId);
+
   // The free-agency sweep moves players between active rosters, the pool,
   // and (via promoteAndBackfill) the affiliate system — all AFTER the
   // reserve/taxi lists above were revalidated, which can leave a protected
@@ -956,6 +965,7 @@ export function advanceToNextSeason(state) {
     arbitrationResult,
     rule5Result,
     playerRightsResult,
+    meritPromotionResult: meritResult,
     freeAgencyResult,
     minorLeagueFreeAgentPoolById: state.minorLeagueFreeAgentPoolById,
     writersCorps,

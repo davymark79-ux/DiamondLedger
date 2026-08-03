@@ -19,7 +19,7 @@
 import { createAffiliateClub } from '../AffiliateClub.js';
 import { generateEstablishedPlayer } from '../generation/playerGenerator.js';
 import { LINEUP_POSITIONS, ROTATION_SIZE } from './rosterSeed.js';
-import { MINOR_LEAGUE_LEVELS_ORDER, MINOR_LEAGUE_QUALITY_BANDS, MINOR_LEAGUE_AGE_RANGES, DEVELOPMENT_LEVELS } from '../constants.js';
+import { MINOR_LEAGUE_LEVELS_ORDER, MINOR_LEAGUE_QUALITY_BANDS, MINOR_LEAGUE_AGE_RANGES, MINOR_LEAGUE_REALIZED_FRACTIONS, DEVELOPMENT_LEVELS } from '../constants.js';
 import { pick } from '../generation/random.js';
 import { AFFILIATE_CITY_POOL, AFFILIATE_NICKNAME_POOL, assignRegionalHub } from '../generation/affiliateNamePools.js';
 
@@ -63,6 +63,8 @@ function buildClubRoster(club, rng, asOfDate) {
   // §47 — level-appropriate ages, so a call-up arrives young enough to
   // accrue real service time (see MINOR_LEAGUE_AGE_RANGES).
   const ageRange = MINOR_LEAGUE_AGE_RANGES[club.level];
+  // §48 — talent from the full population, level sets only how realized.
+  const realizedFractionRange = MINOR_LEAGUE_REALIZED_FRACTIONS[club.level];
   const developmentLevel = DEVELOPMENT_LEVELS[club.level];
   let slot = 0;
   const gen = (position) =>
@@ -71,6 +73,8 @@ function buildClubRoster(club, rng, asOfDate) {
       position,
       qualityRange,
       ageRange,
+      populationPotential: true,
+      realizedFractionRange,
       asOfDate,
       overrides: { id: `${club.id}-${slot++}`, teamId: club.parentTeamId, developmentLevel },
     });

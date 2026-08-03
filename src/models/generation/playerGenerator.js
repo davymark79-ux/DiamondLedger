@@ -135,18 +135,38 @@ function generateEstablishedTruePotential(rng, quality, archetypeShift = 0) {
   return Math.round(clampRating(quality + archetypeShift + randomInRange(rng, -ESTABLISHED_QUALITY_SPREAD, ESTABLISHED_QUALITY_SPREAD)));
 }
 
-function generateEstablishedRating(rng, quality, archetypeShift = 0) {
-  const truePotential = generateEstablishedTruePotential(rng, quality, archetypeShift);
-  const realizedFraction = randomInRange(rng, ...ESTABLISHED_REALIZED_FRACTION_RANGE);
+// §48 — a player must be capped ONLY by his own potential.
+//
+// The quality-anchored draw above ties truePotential to whatever band the
+// caller generated him in, which is right for an MLB roster (a club really
+// is assembling players of a known calibre) but was wrong for the minors:
+// affiliate players were generated at 85-100% realized inside a band whose
+// ceiling was 45, so a AAA player could not POSSIBLY develop into an MLB1
+// player (band floor 45), no matter his talent or how long he played.
+// Measured consequence: ~1 point of growth headroom league-wide in the
+// minors, and MLB1 quality decaying every season because nothing could ever
+// replace a departing MLB1 regular.
+//
+// `populationPotential` instead draws truePotential from the same
+// right-skewed population distribution real draft prospects use — so a
+// Rookie-ball teenager can genuinely be a future star — while
+// `realizedFractionRange` controls how much of it he has reached YET, which
+// is what actually determines the level he belongs at today. Talent is
+// uncapped; readiness is what the level encodes.
+function generateEstablishedRating(rng, quality, archetypeShift = 0, options = {}) {
+  const truePotential = options.populationPotential
+    ? generateTruePotential(rng, archetypeShift)
+    : generateEstablishedTruePotential(rng, quality, archetypeShift);
+  const realizedFraction = randomInRange(rng, ...(options.realizedFractionRange ?? ESTABLISHED_REALIZED_FRACTION_RANGE));
   const current = Math.round(RATING_SCALE.MIN + (truePotential - RATING_SCALE.MIN) * realizedFraction);
   const scoutedPotential = Math.round(truePotential + gaussianRandom(rng, SCOUT_ERROR_MEAN, SCOUT_ERROR_STD_DEV));
   return createRating(current, truePotential, scoutedPotential);
 }
 
-function generateEstablishedRatings(rng, attributeNames, quality, archetypeShifts = {}) {
+function generateEstablishedRatings(rng, attributeNames, quality, archetypeShifts = {}, options = {}) {
   const ratings = {};
   for (const name of attributeNames) {
-    ratings[name] = generateEstablishedRating(rng, quality, archetypeShifts[name] ?? 0);
+    ratings[name] = generateEstablishedRating(rng, quality, archetypeShifts[name] ?? 0, options);
   }
   return ratings;
 }
@@ -315,6 +335,14 @@ export function generateEstablishedPlayer(options = {}) {
   const roleShifts = PITCHER_ROLE_MEAN_SHIFTS[position] ?? {};
   const quality = randomInRange(rng, ...qualityRange);
   const birthNation = pickBirthNation(rng);
+  // §48 — see generateEstablishedRating. Affiliate callers pass these to get
+  // population-drawn potential (talent capped only by the player himself)
+  // plus a level-appropriate realized fraction (how ready he is TODAY).
+  // Every MLB-roster caller omits them and is byte-identical to before.
+  const ratingOptions = {
+    populationPotential: options.populationPotential ?? false,
+    realizedFractionRange: options.realizedFractionRange,
+  };
 
   return createPlayer({
     firstName: pick(rng, FIRST_NAMES_USA),
@@ -330,10 +358,10 @@ export function generateEstablishedPlayer(options = {}) {
     isPitcher,
     developmentLevel: DEVELOPMENT_LEVELS.MLB,
     ratings: {
-      ...generateEstablishedRatings(rng, HITTING_ATTRIBUTES, quality),
-      ...generateEstablishedRatings(rng, BASERUNNING_ATTRIBUTES, quality),
-      ...generateEstablishedRatings(rng, DEFENSE_ATTRIBUTES, quality),
-      ...(isPitcher ? generateEstablishedRatings(rng, PITCHING_ATTRIBUTES, quality, roleShifts) : {}),
+      ...generateEstablishedRatings(rng, HITTING_ATTRIBUTES, quality, {}, ratingOptions),
+      ...generateEstablishedRatings(rng, BASERUNNING_ATTRIBUTES, quality, {}, ratingOptions),
+      ...generateEstablishedRatings(rng, DEFENSE_ATTRIBUTES, quality, {}, ratingOptions),
+      ...(isPitcher ? generateEstablishedRatings(rng, PITCHING_ATTRIBUTES, quality, roleShifts, ratingOptions) : {}),
       // Makeup isn't part of the team-quality anchor — a last-place club isn't
       // necessarily full of bad-character players, same reasoning generatePlayer()
       // already applies (no archetype/position shift on makeup either). Centered

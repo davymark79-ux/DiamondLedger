@@ -167,6 +167,26 @@ export const MINOR_LEAGUE_QUALITY_BANDS = Object.freeze({
 // career. Illustrative placeholders like every other constant here, but
 // anchored to real minor-league age profiles: Rookie ball is teenagers,
 // AAA is mostly mid-20s with a few older org veterans.
+// §48 — how much of his OWN potential a player at each level has realized
+// so far. This, not a quality ceiling, is what a minor-league level now
+// encodes: talent is drawn from the full population (a Rookie-ball teenager
+// can genuinely be a future star), and the level says how far along he is.
+//
+// Replaces the role MINOR_LEAGUE_QUALITY_BANDS used to play in GENERATION.
+// Those bands capped truePotential itself, so a AAA player's ceiling (45)
+// was exactly MLB1's floor (45) and no minor-leaguer could ever develop
+// into an MLB1 regular — measured at ~1 point of league-wide growth
+// headroom in the minors, and the direct cause of MLB1 quality decaying
+// every season (CLAUDE.md §48). The bands remain in use for SELECTION
+// (levelForFreeAgentQuality, findBestFit) where "how good is he now" is
+// genuinely the right question.
+export const MINOR_LEAGUE_REALIZED_FRACTIONS = Object.freeze({
+  AAA: [0.70, 0.85],
+  AA: [0.55, 0.72],
+  A: [0.42, 0.60],
+  ROOKIE: [0.30, 0.48],
+});
+
 export const MINOR_LEAGUE_AGE_RANGES = Object.freeze({
   AAA: [22, 29],
   AA: [21, 26],

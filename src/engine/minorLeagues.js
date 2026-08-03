@@ -26,6 +26,7 @@ import {
   MINOR_LEAGUE_SEASON_LENGTHS,
   MINOR_LEAGUE_QUALITY_BANDS,
   MINOR_LEAGUE_AGE_RANGES,
+  MINOR_LEAGUE_REALIZED_FRACTIONS,
   DEVELOPMENT_LEVELS,
   HITTING_ATTRIBUTES,
   BASERUNNING_ATTRIBUTES,
@@ -157,6 +158,9 @@ export function generateForLevel(level, position, team, rng, asOfDate) {
     // §47 — see MINOR_LEAGUE_AGE_RANGES; a thin-air affiliate fill must be
     // level-appropriate in age too, not just quality.
     ageRange: MINOR_LEAGUE_AGE_RANGES[level],
+    // §48 — same for thin-air fills: capped only by his own potential.
+    populationPotential: true,
+    realizedFractionRange: MINOR_LEAGUE_REALIZED_FRACTIONS[level],
     overrides: {
       id: `${team.id}-${level}-r${Math.floor(rng() * 1e9)}`,
       teamId: team.id,
