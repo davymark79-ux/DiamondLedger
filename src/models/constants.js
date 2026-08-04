@@ -238,6 +238,19 @@ export const HS_CLASS_SURPLUS_MULTIPLIER = 2;
 // returning, still-unclaimed college player) — a rare, immediate "wants no
 // part of this team" outcome distinct from the normal sign-vs-stay decision.
 export const DRAFT_REFUSAL_PROBABILITY = 0.03;
+
+// §49 — modest stacked economic channels. Each is a small, realistic effect
+// of club resources; the design intent is that SEVERAL compound into
+// persistent club differentiation rather than any one being large enough to
+// be implausible on its own. All are centred so a league-average club is
+// exactly neutral, and all are swings between the poorest and richest club.
+//
+// Draft: a bigger signing bonus converts more picks instead of losing them
+// to college. International: same, against the signing-window failure roll —
+// international amateur signings are where money talks hardest in real
+// baseball, so this one is the largest of the small effects.
+export const DRAFT_SIGNING_CAPACITY_SWING = 0.14;
+export const INTERNATIONAL_SIGNING_CAPACITY_SWING = 0.18;
 // Rolled once per college year, only if a redshirt hasn't already been
 // used — a proxy for "appeared in fewer than 25% of games" (no games are
 // simulated for college, per the doc's own permission to proxy this).

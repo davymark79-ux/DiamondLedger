@@ -70,6 +70,7 @@ import {
   INTERNATIONAL_ACADEMY_YEARS,
   COLLEGE_ACCEPTANCE_TRIGGER_PROBABILITY,
   INTERNATIONAL_SIGNING_FAILURE_PROBABILITY,
+  INTERNATIONAL_SIGNING_CAPACITY_SWING,
   INTERNATIONAL_FREE_AGENT_RETIREMENT_AGE_CURVE,
 } from '../models/constants.js';
 
@@ -223,8 +224,14 @@ export function rollCollegeAcceptance(rng) {
 }
 
 /** @returns {{outcome: 'signed'|'unsigned'}} */
-export function rollInternationalDraftOutcome(rng) {
-  return { outcome: rng() < INTERNATIONAL_SIGNING_FAILURE_PROBABILITY ? 'unsigned' : 'signed' };
+export function rollInternationalDraftOutcome(rng, orgStrength = null) {
+  // §49 — the largest of the modest stacked economic channels, because
+  // international amateur signing is where club money talks hardest in real
+  // baseball. A well-resourced club closes the signing window more often.
+  // Centred so a league-average club sees exactly the base failure rate.
+  const failure = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY
+    - (orgStrength === null ? 0 : (orgStrength - 0.5) * INTERNATIONAL_SIGNING_CAPACITY_SWING);
+  return { outcome: rng() < failure ? 'unsigned' : 'signed' };
 }
 
 /**
@@ -293,7 +300,8 @@ export function runInternationalPathway(
   internationalFreeAgentPoolById,
   affiliateRosterByClubId,
   rng,
-  asOfDate
+  asOfDate,
+  orgStrengthByTeamId = null
 ) {
   const summary = {
     newAcademyEnrollments: freshAcademyClass.length,
@@ -338,7 +346,7 @@ export function runInternationalPathway(
   for (const selection of selections) {
     const player = academyPlayersById.get(selection.playerId);
     const enrollment = academyEnrollmentById.get(selection.playerId);
-    const decision = rollInternationalDraftOutcome(rng);
+    const decision = rollInternationalDraftOutcome(rng, orgStrengthByTeamId?.get(selection.teamId) ?? null);
 
     enrichedSelections.push({
       ...selection,

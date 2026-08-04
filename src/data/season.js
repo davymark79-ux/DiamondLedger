@@ -62,12 +62,13 @@ import { drawCupGroups, simulateSeasonWithCup, buildCupGroupStandings, computeCu
 import { computeInitialReserveRoster, revalidateAndTopUpReserveRoster } from '../engine/rosterProtection.js';
 import { computeInitialTaxiSquad, revalidateAndTopUpTaxiSquad, resolveTaxiPlayers, incrementOptionYearsUsed } from '../engine/taxiSquad.js';
 import { buildExpansionBenchPlayers, EXPANSION_TRIGGER_WEEKS_REMAINING } from '../engine/rosterExpansion.js';
-import { assignMissingContracts } from '../engine/contracts.js';
+import { assignMissingContracts, computeClubPayrollCapacity } from '../engine/contracts.js';
 import { advanceServiceTime, seedFoundingServiceTime, backfillMissingServiceRecords } from '../engine/serviceTime.js';
 import { runArbitrationAndTenderSweep } from '../engine/arbitration.js';
 import { runRule5Draft, resolveRule5Obligations } from '../engine/rule5Draft.js';
 import { runMinorLeagueFreeAgencySweep, advanceMinorLeagueFreeAgentPool } from '../engine/minorLeagueFreeAgency.js';
 import { runMeritPromotions } from '../engine/meritPromotion.js';
+import { advanceAffiliateDevelopment } from '../engine/affiliateDevelopment.js';
 import { runSeasonAwards } from '../engine/awards.js';
 import { resolveAwardNaming, awardSlotKey } from '../engine/awardNaming.js';
 import { advanceWritersCorps } from '../engine/leagueProgression.js';
@@ -81,6 +82,31 @@ const SEASON_RNG_BASE_SEED = 20260201; // this league's original single-season s
 // electorate can never perturb which players/managers get generated —
 // same precedent as leagueSeed.js's TEAM_ECONOMICS_SEED.
 const WRITERS_CORPS_SEED = 20260501;
+
+/**
+ * §49 — each club's economic strength as a 0-1 position within the league's
+ * payroll-capacity range (0 = poorest, 1 = richest). Defined ONCE here and
+ * fed to both differentiation channels — affiliate development
+ * (engine/affiliateDevelopment.js) and free agency (engine/freeAgency.js) —
+ * so "how strong is this club" can never drift into two formulas.
+ */
+function buildOrgStrengthByTeamId(teamsForSeason) {
+  const capacities = teamsForSeason.map((t) => computeClubPayrollCapacity(t));
+  const min = Math.min(...capacities);
+  const max = Math.max(...capacities);
+  const span = max - min;
+  return new Map(
+    teamsForSeason.map((t, i) => [t.id, span === 0 ? 0.5 : (capacities[i] - min) / span])
+  );
+}
+
+// Computed ONCE at module load, not per season: marketSize and
+// ownership.ownerWealth are static identity fields (see applyLiveOverrides'
+// note — only tier and division ever change), so a club's economic strength
+// is a constant. Every §49 channel reads this same map, so the draft,
+// international signings, affiliate development and free agency cannot drift
+// into separate notions of "how strong is this club".
+const ORG_STRENGTH_BY_TEAM_ID = buildOrgStrengthByTeamId(teams);
 
 /**
  * Awards for one completed season, plus the milestone-naming resolution.
@@ -150,7 +176,7 @@ export const LEGACY_LOCAL_STORAGE_KEY = 'diamondLedger.leagueState.v7';
 // itself and checked on load (see isCompatibleSave below), since
 // IndexedDB only ever has the one 'current' key (data/indexedDbStorage.js)
 // — there's no separate versioned key to bump the way localStorage had.
-export const STATE_SCHEMA_VERSION = 24;
+export const STATE_SCHEMA_VERSION = 25;
 
 /**
  * Runs this season's draft (using ITS OWN just-finished standings/playoff
@@ -188,7 +214,7 @@ function runDraftAndCollegePathway(
   const freshHsClass = generateHsClass(rng, asOfDate, `hs-s${seasonNumber}`);
 
   const { summary, selections } = runCollegePathway(
-    picks, freshHsClass, collegeEnrollmentById, collegePlayersById, freeAgentPoolById, affiliateRosterByClubId, rng, asOfDate
+    picks, freshHsClass, collegeEnrollmentById, collegePlayersById, freeAgentPoolById, affiliateRosterByClubId, rng, asOfDate, ORG_STRENGTH_BY_TEAM_ID
   );
 
   return { seasonNumber, picks, selections, collegeSummary: summary };
@@ -240,7 +266,7 @@ function runInternationalPathwayForSeason(
     academyEnrollmentById, academyPlayersById,
     collegeEnrollmentById, collegePlayersById,
     internationalFreeAgentPoolById, affiliateRosterByClubId,
-    rng, asOfDate
+    rng, asOfDate, ORG_STRENGTH_BY_TEAM_ID
   );
 
   return { seasonNumber, picks, selections, internationalSummary: summary };
@@ -541,6 +567,8 @@ export function computeFreshSeason1State() {
     freeAgencyResult: { reachedFreeAgency: 0, reSigned: 0, toMarket: 0, signedFromPool: 0, backfilled: 0 },
     // §48 — no season has been played yet, so nobody has outgrown a level.
     meritPromotionResult: { promotedToMlb: 0, promotedWithinMinors: 0 },
+    // §49 — no season has been played yet, so nobody has developed.
+    affiliateDevelopmentResult: { developed: 0 },
     minorLeagueFreeAgentPoolById: new Map(),
     playoffResult,
     seasonResult,
@@ -899,7 +927,15 @@ export function advanceToNextSeason(state) {
     state.establishedFreeAgentPoolById,
     state.affiliateRosterByClubId,
     rng,
-    asOfDate
+    asOfDate,
+    // §49 — economic differentiation: richest-first signing order and a
+    // real affordability gate. Measured on its own this channel is NOT
+    // enough (club SD 1.03 -> 0.95, i.e. unchanged) because free agency is
+    // a minor route compared with internal development — see
+    // engine/affiliateDevelopment.js, which applies the same economic
+    // strength to the dominant channel. Kept because it is the correct
+    // behaviour regardless of how much it moves the aggregate.
+    new Map(teamsForNextSeason.map((t) => [t.id, computeClubPayrollCapacity(t)]))
   );
 
   // A SECOND contract sweep, deliberately. Several late-stage mechanics
@@ -918,6 +954,25 @@ export function advanceToNextSeason(state) {
   // must NOT be another advanceServiceTime call — that one is a running
   // counter and would double-credit the entire league a second season.
   backfillMissingServiceRecords(rosterByTeamId, state.affiliateRosterByClubId, seasonNumber, asOfDate);
+
+  // §49 — affiliate players finally DEVELOP. Until now advanceDevelopmentPeriod
+  // ran only for MLB rosters, college and the academies, so the entire
+  // ~5,500-player minor-league population had byte-identical ratings season
+  // after season (verified: 400 of 400 traceable AAA players unchanged).
+  // Economic strength modulates it, which is what actually differentiates
+  // clubs — development is the dominant talent channel, unlike free agency.
+  //
+  // MUST run BEFORE merit promotion below: a prospect who improved this
+  // season should be eligible for promotion on THIS season's strength, not
+  // wait a full extra year for the sweep to notice.
+  const orgStrengthByTeamId = ORG_STRENGTH_BY_TEAM_ID;
+  const affiliateDevelopment = advanceAffiliateDevelopment(
+    teamsForNextSeason,
+    state.affiliateRosterByClubId,
+    rng,
+    asOfDate,
+    orgStrengthByTeamId
+  );
 
   // §48 — merit promotion: the best available player in each org climbs,
   // 1-for-1, so talent reaches the majors on merit rather than only when
@@ -966,6 +1021,7 @@ export function advanceToNextSeason(state) {
     rule5Result,
     playerRightsResult,
     meritPromotionResult: meritResult,
+    affiliateDevelopmentResult: affiliateDevelopment,
     freeAgencyResult,
     minorLeagueFreeAgentPoolById: state.minorLeagueFreeAgentPoolById,
     writersCorps,

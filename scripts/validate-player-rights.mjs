@@ -241,7 +241,7 @@ console.log('\n=== 8. Real integration: nothing drains, the pool stays bounded =
   for (const [, r] of s.rosterByTeamId) for (const k of SECTIONS) activeTotal += r[k].length;
   assert(activeTotal === 1300, `all 50 clubs still carry exactly 26 active players (got ${activeTotal})`);
   assert(s.minorLeagueFreeAgentPoolById.size < 20000, `the pool stays bounded rather than growing without limit (${s.minorLeagueFreeAgentPoolById.size})`);
-  assert(s.schemaVersion === 24, `schemaVersion is the current STATE_SCHEMA_VERSION, 24 (got ${s.schemaVersion})`);
+  assert(s.schemaVersion === 25, `schemaVersion is the current STATE_SCHEMA_VERSION, 25 (got ${s.schemaVersion})`);
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);

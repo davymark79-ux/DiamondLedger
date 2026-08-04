@@ -82,6 +82,34 @@ const ROSTER_SECTIONS = ['lineup', 'rotation', 'bullpen', 'bench'];
 // "most re-sign with their own org" rate. Illustrative placeholder.
 export const FREE_AGENCY_RESIGN_PROBABILITY = 0.55;
 
+// §49 — how much a club's economic strength swings its ability to keep its
+// own free agents. A club at the top of the capacity range re-signs this
+// much more often than the league-average club; the weakest this much less.
+// This is one of the two channels that make big markets persistently
+// stronger (the other is winning the open-market signing pass below).
+export const RESIGN_CAPACITY_SWING = 0.30;
+
+/**
+ * A club's economic strength as a 0-1 position within the league's capacity
+ * range — 0 = poorest club, 1 = richest. Used for BOTH re-signing odds and
+ * open-market priority, so a single notion of "how strong is this club"
+ * drives both channels rather than two unrelated formulas.
+ */
+function capacityStrength(teamId, capacityByTeamId) {
+  const values = [...capacityByTeamId.values()];
+  if (values.length === 0) return 0.5;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return 0.5;
+  return ((capacityByTeamId.get(teamId) ?? min) - min) / (max - min);
+}
+
+function activePayroll(roster) {
+  let total = 0;
+  for (const key of ROSTER_SECTIONS) for (const p of (roster[key] ?? [])) total += p.contract?.annualSalary ?? 0;
+  return total;
+}
+
 // ===== Amateur free agency (College + International, shared) =====
 
 /**
@@ -261,10 +289,17 @@ export function hasJustReachedFreeAgency(player) {
   );
 }
 
-function bestPoolFitForSection(pool, sectionKey) {
+/**
+ * §49 — the best pool player at this section the club can actually pay for.
+ * `remainingCapacity` of Infinity reproduces the old take-the-best behaviour
+ * exactly, which is what every caller that passes no capacity map gets.
+ */
+function bestAffordablePoolFit(pool, sectionKey, remainingCapacity) {
   let best = null;
   for (const player of pool.values()) {
     if (sectionKeyForPosition(player.primaryPosition) !== sectionKey) continue;
+    const cost = player.contract?.annualSalary ?? 0;
+    if (cost > remainingCapacity) continue;
     if (!best || playerQualityScore(player) > playerQualityScore(best)) best = player;
   }
   return best;
@@ -308,7 +343,7 @@ function bestPoolFitForSection(pool, sectionKey) {
  * @param {Date} asOfDate
  * @returns {{reachedFreeAgency: number, reSigned: number, toMarket: number, signedFromPool: number, backfilled: number}}
  */
-export function runFreeAgencySweep(teamsInWaiverOrder, rosterByTeamId, establishedFreeAgentPoolById, affiliateRosterByClubId, rng, asOfDate) {
+export function runFreeAgencySweep(teamsInWaiverOrder, rosterByTeamId, establishedFreeAgentPoolById, affiliateRosterByClubId, rng, asOfDate, capacityByTeamId = null) {
   let reachedFreeAgency = 0, reSigned = 0, toMarket = 0, signedFromPool = 0, backfilled = 0;
 
   // Step 1 — departures and in-place re-signings.
@@ -325,7 +360,12 @@ export function runFreeAgencySweep(teamsInWaiverOrder, rosterByTeamId, establish
         if (!hasJustReachedFreeAgency(player)) { kept.push(player); continue; }
         reachedFreeAgency++;
         const repriced = { ...player, contract: generateContractForPlayer(player, 'ACTIVE', null) };
-        if (rng() < FREE_AGENCY_RESIGN_PROBABILITY) {
+        // §49 — a rich club keeps its own stars more often than a poor one.
+        // Centred so the league-average club sits at the base rate.
+        const resignChance = capacityByTeamId
+          ? FREE_AGENCY_RESIGN_PROBABILITY + (capacityStrength(teamId, capacityByTeamId) - 0.5) * RESIGN_CAPACITY_SWING
+          : FREE_AGENCY_RESIGN_PROBABILITY;
+        if (rng() < resignChance) {
           kept.push(repriced);
           reSigned++;
         } else {
@@ -339,15 +379,42 @@ export function runFreeAgencySweep(teamsInWaiverOrder, rosterByTeamId, establish
   }
 
   // Steps 2 and 3 — refill every section back to its pre-sweep size.
-  for (const team of teamsInWaiverOrder) {
+  //
+  // §49 — ORDER MATTERS, and it used to be exactly backwards. This pass
+  // originally ran worst-record-first by analogy with the draft and waivers.
+  // That made it the single strongest of the league's four equalizers: the
+  // main route by which good players change clubs handed them to the weakest
+  // clubs every offseason. Measured consequence — club quality SD collapsing
+  // to 1.03 and five-season persistence to r=0.25, i.e. a league of
+  // interchangeable clubs. Richest-first instead, so economic strength
+  // compounds into on-field strength the way it does in real baseball. The
+  // draft, waivers and Rule 5 remain worst-first, which is the correct
+  // counterweight — a poor club still gets first call on amateur talent.
+  const refillOrder = capacityByTeamId
+    ? [...teamsInWaiverOrder].sort(
+        (a, b) => (capacityByTeamId.get(b.id) ?? 0) - (capacityByTeamId.get(a.id) ?? 0)
+      )
+    : teamsInWaiverOrder;
+
+  for (const team of refillOrder) {
     const roster = rosterByTeamId.get(team.id);
     if (!roster) continue;
     const sizes = targetSizes.get(team.id);
     const updated = { ...roster };
 
+    const capacity = capacityByTeamId?.get(team.id) ?? Infinity;
+
     for (const key of ROSTER_SECTIONS) {
       while (updated[key].length < sizes[key]) {
-        const signing = bestPoolFitForSection(establishedFreeAgentPoolById, key);
+        // §49 — a club cannot simply take the best man available; it has to
+        // afford him. A club already at its payroll capacity falls through to
+        // its own farm system instead, which is exactly how a small market
+        // ends up developing rather than buying.
+        const signing = bestAffordablePoolFit(
+          establishedFreeAgentPoolById,
+          key,
+          capacity - activePayroll(updated)
+        );
         if (signing) {
           establishedFreeAgentPoolById.delete(signing.id);
           // A pool player may legitimately carry NO contract — the season-1

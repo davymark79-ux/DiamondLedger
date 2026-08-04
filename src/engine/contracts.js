@@ -142,6 +142,46 @@ export const SALARY_FLOOR = 37_000_000;
 export const LUXURY_TAX_THRESHOLD = 90_000_000;
 export const LUXURY_TAX_RATE = 0.20;
 
+// ===== Per-club payroll capacity (§49) =====
+//
+// The first mechanical use of marketSize/ownerWealth anywhere. §19 gave
+// every club real, varied values for both and they have driven nothing but
+// cosmetics since — stadium capacity, attendance flavour, writer headcount,
+// and two display rows.
+//
+// This exists because the league was measured going HOMOGENEOUS: club-level
+// quality SD collapses from 8.31 to 1.03 over 26 seasons and five-season
+// persistence falls to r=0.25, so by equilibrium every club is
+// interchangeable and promotion/relegation stops tracking anything real.
+// The cause is that every acquisition channel is an EQUALIZER — the domestic
+// draft, waiver claims, the Rule 5 draft and §47's own free-agency signing
+// pass all run worst-record-first — while nothing pulls clubs apart.
+//
+// Capacity is the differentiating force: a big-market club under a wealthy
+// owner can sustain a higher payroll, so it wins more open-market players
+// and keeps more of its own. Market size is the larger term (a big market
+// generates revenue every season); owner wealth is a smaller one and models
+// willingness to run a deficit rather than durable income.
+export const MARKET_SIZE_CAPACITY_WEIGHT = 0.7;
+export const OWNER_WEALTH_CAPACITY_WEIGHT = 0.3;
+// Spread of sustainable payroll across the league, as a multiple of
+// SALARY_FLOOR. The weakest club sits at the floor; the strongest sustains
+// this much more. Illustrative placeholder — the value that matters is
+// whether it produces persistent club differentiation, which validate:clubs
+// measures directly rather than asserting.
+export const MAX_CAPACITY_MULTIPLE = 2.6;
+
+/**
+ * @param {object} team - needs `marketSize` (0-1) and `ownership.ownerWealth` (0-1)
+ * @returns {number} sustainable annual payroll in whole dollars
+ */
+export function computeClubPayrollCapacity(team) {
+  const market = Math.min(1, Math.max(0, team?.marketSize ?? 0.5));
+  const wealth = Math.min(1, Math.max(0, team?.ownership?.ownerWealth ?? 0.5));
+  const strength = market * MARKET_SIZE_CAPACITY_WEIGHT + wealth * OWNER_WEALTH_CAPACITY_WEIGHT;
+  return Math.round(SALARY_FLOOR * (1 + strength * (MAX_CAPACITY_MULTIPLE - 1)));
+}
+
 // ===== Service-time leverage (CLAUDE.md §47) =====
 //
 // This replaced an age-based proxy (`computeServiceTimeProxyFraction`,

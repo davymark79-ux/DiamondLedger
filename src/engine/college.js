@@ -60,6 +60,7 @@ import {
   HS_CLASS_SURPLUS_MULTIPLIER,
   COLLEGE_MAX_YEARS,
   DRAFT_REFUSAL_PROBABILITY,
+  DRAFT_SIGNING_CAPACITY_SWING,
   COLLEGE_REDSHIRT_TRIGGER_PROBABILITY,
   GRADUATION_RELEASE_PROBABILITY,
   FREE_AGENT_RETIREMENT_AGE_CURVE,
@@ -243,9 +244,18 @@ export function advanceCollegeYear(enrollment, player, rng, asOfDate) {
  * later annual decisions.
  * @returns {{outcome: 'refused'|'signed'|'deferred'}}
  */
-export function rollDraftOutcome(player, school, draftRound, rng) {
+export function rollDraftOutcome(player, school, draftRound, rng, orgStrength = null) {
   if (rng() < DRAFT_REFUSAL_PROBABILITY) return { outcome: 'refused' };
-  return { outcome: rng() < computeStayProbability(player, school, draftRound) ? 'deferred' : 'signed' };
+  // §49 — one of several MODEST stacked economic channels. A well-resourced
+  // club offers a bigger signing bonus, so it converts more of its picks
+  // instead of losing them to college. Deliberately small and centred on the
+  // league-average club: the point is that several small realistic effects
+  // compound, not that any one of them dominates. The draft ORDER itself
+  // stays strictly worst-first — a poor club must keep first call on amateur
+  // talent, which is what stops economics becoming a doom loop.
+  const stay = computeStayProbability(player, school, draftRound)
+    - (orgStrength === null ? 0 : (orgStrength - 0.5) * DRAFT_SIGNING_CAPACITY_SWING);
+  return { outcome: rng() < stay ? 'deferred' : 'signed' };
 }
 
 /**
@@ -325,7 +335,7 @@ function processCollegeYearAdvance(playerId, ctx) {
  *   selections: {pickId: string, round: number, pickNumber: number, teamId: string, playerId: string, firstName: string, lastName: string, primaryPosition: string, isPitcher: boolean, fromCollege: boolean, outcome: string}[]
  * }}
  */
-export function runCollegePathway(picks, freshHsClass, collegeEnrollmentById, collegePlayersById, freeAgentPoolById, affiliateRosterByClubId, rng, asOfDate) {
+export function runCollegePathway(picks, freshHsClass, collegeEnrollmentById, collegePlayersById, freeAgentPoolById, affiliateRosterByClubId, rng, asOfDate, orgStrengthByTeamId = null) {
   const summary = {
     newEnrollments: 0, refusals: 0, deferred: 0, signedFromCollege: 0,
     graduatedSigned: 0, graduatedReleased: 0, graduatedUnclaimed: 0, freeAgentRetirements: 0,
@@ -356,7 +366,7 @@ export function runCollegePathway(picks, freshHsClass, collegeEnrollmentById, co
       ? COLLEGE_SCHOOLS_BY_ID.get(existingEnrollment.schoolId)
       : pick(rng, COLLEGE_SCHOOLS); // a candidate/hypothetical school, becomes real if he defers
 
-    const decision = rollDraftOutcome(player, school, selection.round, rng);
+    const decision = rollDraftOutcome(player, school, selection.round, rng, orgStrengthByTeamId?.get(selection.teamId) ?? null);
     enrichedSelections.push({
       ...selection,
       firstName: player.firstName,
