@@ -892,6 +892,38 @@ Also newly exercised for the first time: `VARIANCE_STD_DEV_BY_LEVEL` (Rookie bal
 
 `STATE_SCHEMA_VERSION` 24 → 25 (new persisted `affiliateDevelopmentResult`), all script checks updated proactively.
 
+#### 49a. The mixing A/B — hypothesis falsified, and the benchmark was wrong
+
+The test §49 named as "the cheap next test" was run: 26 seasons, arm A on committed HEAD, arm B identical but with `runMeritPromotions` gated off (a temporary env check at the single call site in `data/season.js`, reverted afterwards — no code change survives this). No engine change was needed; the whole test is a measurement harness. Arm A reproduced §49's recorded numbers, which is what makes the comparison trustworthy: season-1 SD **8.315** against §49's recorded 8.31, equilibrium `corrFarm` 0.777 against 0.806.
+
+| equilibrium (seasons 21-26) | A: merit ON | B: merit OFF |
+|---|---|---|
+| club quality SD | 1.147 | **1.318** |
+| club quality mean | 41.39 | 40.52 |
+| corr(econ strength, MLB quality) | 0.651 | 0.667 |
+| corr(econ strength, farm quality) | 0.777 | 0.770 |
+| 5-season persistence | 0.636 | 0.727 |
+
+**The mixing hypothesis is falsified.** Removing merit promotion entirely — ~40 MLB promotions and ~370 internal moves per season, gone, 0/0 in every season of arm B — buys **+0.17 SD (+15%)**. More decisively, the *collapse trajectory* is nearly identical in both arms (8.32 → ~1.2 by season 10 either way). Mixing is not what compresses club spread, and "reduce mixing" is not the lever. Merit promotion does cost ~0.9 points of league quality when removed and does suppress persistence somewhat (0.64 vs 0.73), so it is doing real work — just not the work this test suspected.
+
+**The more important finding: 8.31 was never a legitimate benchmark.** Decomposing season 1 by tier (costs no simulated seasons, just fresh state):
+
+```
+league-wide  n=50  mean 44.61  SD 8.315
+  MLB1   n=30  mean 51.29  SD 1.556  range 46.9-53.8
+  MLB2   n=20  mean 34.59  SD 1.378  range 31.7-37.2
+```
+
+Season 1's 8.315 is almost entirely the **hard-coded 16.7-point gap between two seed bands**. Genuine club-to-club spread at season 1 is **1.556 within MLB1 and 1.378 within MLB2** — indistinguishable from the equilibrium 1.15-1.32 that §49 recorded as a failure. The league has never had more than ~1.5 points of real club differentiation; what dissolves over 10 seasons is the artificial tier gap, which is *exactly what should dissolve* under the user's own stated design ("MLB1/MLB2 are always in flux — some stay up, some stay down, some are elevator clubs"). A permanently maintained 8.31 would mean tiers that never churn.
+
+So §49's channels did not fail to produce spread. They preserved spread at the scale the league was actually seeded with, while adding economic ORDERING (corr 0.65-0.78) and PERSISTENCE (0.64) that genuinely did not exist before — and SD does not decay to zero, it bottoms around 1.03-1.08 near seasons 10 and 20 and drifts back up.
+
+**Generalizable, and the third time this project has been bitten by the same shape**: §40 calibrated against a transient trough, §46 found a prior phase's calibration *method* had expired, and here a target number was an artifact of a seeding constant rather than a measured property. **Before treating a gap between current and target as a defect, decompose the target and confirm it measures what you think it measures.**
+
+**What remains genuinely open is a design question, not a bug**: is SD ~1.3 on a mean of 41 (range 37.6-43.7) the spread the league should have? That is the user's call. If more is wanted, both this A/B and §49's negative results rule out the two cheap answers — more flow channels (three of them bought +18%) and less mixing (+15%). The remaining candidates are a **persistent club-level multiplier** (e.g. a durable development-rate edge rather than a per-season flow) or **widening `generateTruePotential`'s population distribution** so there is more raw talent variance for economics to sort on.
+
+**Still unbuilt and worth noting**: `contracts.js`'s `MAX_CAPACITY_MULTIPLE` comment refers to "`validate:clubs` measures directly rather than asserting" — there is no `validate-clubs.mjs` and no such npm script. §49's differentiation work has no regression script guarding it.
+
 ## Path to the 50-man Roster System
 
 The user asked to scope out the full 50-man roster/roster-transaction system (`commissioner-vision-and-roster-rules.md` + `player-movement.md`), the single biggest missing structural piece flagged repeatedly across prior arcs (the still-deferred flex-contract/majors-contract signing branches, `engine/retirement.js`'s deferred DFA-driven-retirement hook). Confirmed via `AskUserQuestion`: the **full vision** (roster structure through Rule 5/trades/rights), and **building real contracts/salaries as part of it** too (not deferring economics to a separate ask) — the biggest single arc this project has taken on, bigger than "Path to Draft, Minors & Free Agency" (5 phases). 10-phase roadmap, sequenced by real dependency:
