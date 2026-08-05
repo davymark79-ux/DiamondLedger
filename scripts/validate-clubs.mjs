@@ -242,42 +242,44 @@ console.log('\n=== 3. All four §49 channels are wired, centred, and pointing th
   console.log(`  international signing     flip point: rich ${inRich.toFixed(3)}  unsupplied ${inNull.toFixed(3)}  poor ${inPoor.toFixed(3)}  (swing ${INTERNATIONAL_SIGNING_CAPACITY_SWING})`);
   assert(inRich < inPoor, 'international: a richer club closes the signing window more often');
 
-  // MEASURED DEFECT, asserted as it actually behaves rather than as intended
-  // — found by this probe, and left for a deliberate decision rather than
-  // retuned here (changing either constant would invalidate §49's measured
-  // outcomes). rollInternationalDraftOutcome computes
+  // THE INVARIANT THAT WAS VIOLATED, and the reason this probe exists.
+  // rollInternationalDraftOutcome computes
   //     failure = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY - (s - 0.5) * SWING
-  // with a base failure of only 0.05 against a swing of 0.18. A club above
-  // strength 0.5 + 0.05/0.18 = 0.778 drives that NEGATIVE, and a probability
-  // below zero simply never fires — so the top ~22% of the strength range is
-  // saturated and indistinguishable. Two consequences:
-  //   1. the channel is NOT centred: a rich club can gain at most 0.05 while
-  //      a poor club loses the full 0.09, so it acts more as a penalty on
-  //      poor clubs than a bonus to rich ones;
-  //   2. its EFFECTIVE swing is 0.14, not 0.18 — identical to the draft
-  //      channel, so §49's "international is the largest amateur channel"
-  //      holds in the constant but not in behaviour.
+  // so a centred swing is only expressible while the base leaves room for
+  // the full half-swing in BOTH directions. At the original 0.05 base
+  // against a 0.18 swing it did not: every club above strength
+  // 0.5 + 0.05/0.18 = 0.778 drove failure NEGATIVE, which never fires. The
+  // top ~22% of the range was saturated, the channel was asymmetric (rich
+  // gain 0.05, poor lose 0.09), and its effective swing was 0.14 —
+  // identical to the draft channel §49 designed it to exceed. §49c raised
+  // the base to 0.10. This asserts the invariant directly, so the same
+  // class of defect cannot return silently through EITHER constant.
   const effectiveIntlSwing = inPoor - inRich;
-  const saturationStrength = 0.5 + INTERNATIONAL_SIGNING_FAILURE_PROBABILITY / INTERNATIONAL_SIGNING_CAPACITY_SWING;
+  const headroom = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY - INTERNATIONAL_SIGNING_CAPACITY_SWING / 2;
   console.log(
-    `    NOTE: effective swing ${effectiveIntlSwing.toFixed(3)} vs nominal ${INTERNATIONAL_SIGNING_CAPACITY_SWING} — ` +
-      `clamped at zero for every club above strength ${saturationStrength.toFixed(3)}`
+    `    base ${INTERNATIONAL_SIGNING_FAILURE_PROBABILITY} vs half-swing ${(INTERNATIONAL_SIGNING_CAPACITY_SWING / 2).toFixed(3)} ` +
+      `— headroom ${headroom.toFixed(3)}, effective swing ${effectiveIntlSwing.toFixed(3)}`
   );
   assert(
-    Math.abs(inRich) < 1e-3,
-    'the richest club saturates at a zero failure rate — documented asymmetry, see the comment above and CLAUDE.md §49b'
+    headroom > 0,
+    `INVARIANT: base failure (${INTERNATIONAL_SIGNING_FAILURE_PROBABILITY}) exceeds half the swing (${(INTERNATIONAL_SIGNING_CAPACITY_SWING / 2).toFixed(3)}) — the richest club's failure probability stays strictly positive, so no part of the strength range saturates (§49c)`
+  );
+  assert(inRich > 0, `the richest club still has a real failure probability (${inRich.toFixed(3)}) rather than a clamped zero`);
+  assert(
+    Math.abs(effectiveIntlSwing - INTERNATIONAL_SIGNING_CAPACITY_SWING) < 1e-3,
+    `the FULL nominal swing is realized (measured ${effectiveIntlSwing.toFixed(3)} vs nominal ${INTERNATIONAL_SIGNING_CAPACITY_SWING}) — this measured 0.14 before §49c`
   );
   assert(
-    Math.abs(effectiveIntlSwing - INTERNATIONAL_SIGNING_FAILURE_PROBABILITY - INTERNATIONAL_SIGNING_CAPACITY_SWING / 2) < 1e-3,
-    `the effective swing is base + half-swing = ${(INTERNATIONAL_SIGNING_FAILURE_PROBABILITY + INTERNATIONAL_SIGNING_CAPACITY_SWING / 2).toFixed(3)}, not the nominal ${INTERNATIONAL_SIGNING_CAPACITY_SWING} (measured ${effectiveIntlSwing.toFixed(3)})`
+    Math.abs((inRich + inPoor) / 2 - inNull) < 1e-3,
+    'international signing is genuinely centred — omitting orgStrength matches the league-average club exactly'
   );
   assert(
-    inNull - inRich < inPoor - inNull,
-    'and it is asymmetric — a rich club gains less than a poor club loses, because only the rich side clamps'
+    Math.abs((inNull - inRich) - (inPoor - inNull)) < 1e-3,
+    'and symmetric — a rich club gains exactly what a poor club loses, which was NOT true before §49c'
   );
   assert(
-    INTERNATIONAL_SIGNING_CAPACITY_SWING > DRAFT_SIGNING_CAPACITY_SWING,
-    'international signing is the larger of the two amateur channels BY CONSTANT — though see the note above on its effective magnitude'
+    INTERNATIONAL_SIGNING_CAPACITY_SWING > DRAFT_SIGNING_CAPACITY_SWING && effectiveIntlSwing > drPoor - drRich,
+    'international signing is the larger of the two amateur channels in EFFECT, not just by constant — §49 designed it that way and §49c is what makes it true'
   );
 
   const capacityByTeamId = new Map([['rich', 100e6], ['mid', 60e6], ['poor', 37e6]]);

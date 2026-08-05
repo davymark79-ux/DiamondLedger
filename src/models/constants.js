@@ -333,7 +333,25 @@ export const COLLEGE_ACCEPTANCE_TRIGGER_PROBABILITY = 0.08;
 // still has an academy year left falls back into the academy; one whose
 // 3-year window already closed exits straight to the international
 // free-agent pool.
-export const INTERNATIONAL_SIGNING_FAILURE_PROBABILITY = 0.05;
+// §49c — raised 0.05 -> 0.10 to fix a saturation defect, NOT because the
+// base rate itself was judged wrong. A centred economic swing is only
+// expressible if the base leaves room for it in both directions: with
+// INTERNATIONAL_SIGNING_CAPACITY_SWING at 0.18, any club above org strength
+// 0.5 + base/swing drove the failure probability NEGATIVE, which simply
+// never fires. At 0.05 that boundary sat at 0.778, so the richest ~22% of
+// the strength range was saturated and indistinguishable, the channel was
+// asymmetric (a rich club gained at most 0.05 while a poor one lost the
+// full 0.09), and its effective swing was 0.14 — identical to the domestic
+// draft's, though §49 designed it to be the larger of the two.
+//
+// The invariant this must preserve: BASE >= SWING / 2, with margin. At 0.10
+// against a 0.18 swing the richest club fails 1% of the time and the
+// poorest 19%, both strictly inside (0, 1), so the full swing is realized
+// and the league-average club sits exactly at the base rate.
+//
+// Measured cost, accepted deliberately (see §49c): league-wide
+// international signings fall ~460 -> ~445 per season out of 500 picks.
+export const INTERNATIONAL_SIGNING_FAILURE_PROBABILITY = 0.10;
 // Shifted ~2 years younger than FREE_AGENT_RETIREMENT_AGE_CURVE — academy
 // exit is a FIXED ~20-21 age point (3 years from a 17-18 creation age),
 // unlike college graduation's more variable ~22-24. Kept as its own,

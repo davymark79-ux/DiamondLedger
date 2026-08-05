@@ -116,7 +116,16 @@ console.log('\n=== 3. rollCollegeAcceptance / rollInternationalDraftOutcome: emp
   console.log(`  observed college-acceptance rate: ${(acceptRate * 100).toFixed(2)}% (configured ${COLLEGE_ACCEPTANCE_TRIGGER_PROBABILITY * 100}%)`);
   console.log(`  observed signing-failure rate: ${(unsignedRate * 100).toFixed(2)}% (configured ${INTERNATIONAL_SIGNING_FAILURE_PROBABILITY * 100}%)`);
   assert(acceptRate > 0.06 && acceptRate < 0.10, 'college-acceptance rate lands in a plausible band around the configured 8%');
-  assert(unsignedRate > 0.03 && unsignedRate < 0.07, 'signing-failure rate lands in a plausible band around the configured 5%');
+  // Band derived from the constant rather than hardcoded — §49c raised this
+  // rate 0.05 -> 0.10 to fix a saturation defect, and a literal 0.03-0.07
+  // band went stale the moment it moved (§40's "engine right, test stale"
+  // case). +/- 40% is the same tolerance the literal band expressed.
+  const unsignedLo = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY * 0.6;
+  const unsignedHi = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY * 1.4;
+  assert(
+    unsignedRate > unsignedLo && unsignedRate < unsignedHi,
+    `signing-failure rate lands in a plausible band around the configured ${(INTERNATIONAL_SIGNING_FAILURE_PROBABILITY * 100).toFixed(0)}% (${(unsignedLo * 100).toFixed(1)}-${(unsignedHi * 100).toFixed(1)}%)`
+  );
 }
 
 console.log('\n=== 4. advanceAcademyYear: exit-exactly-at-year-3 state machine ===\n');

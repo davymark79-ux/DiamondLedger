@@ -229,6 +229,14 @@ export function rollInternationalDraftOutcome(rng, orgStrength = null) {
   // international amateur signing is where club money talks hardest in real
   // baseball. A well-resourced club closes the signing window more often.
   // Centred so a league-average club sees exactly the base failure rate.
+  //
+  // §49c — that centring is only real while the base failure probability
+  // leaves room for the full half-swing in BOTH directions. It did not:
+  // at a 0.05 base against this 0.18 swing, every club above org strength
+  // 0.778 drove `failure` negative, which never fires, so the top of the
+  // range was saturated and the channel acted as a penalty on poor clubs
+  // rather than a symmetric redistribution. The base is now 0.10.
+  // INVARIANT, asserted directly by validate:clubs: base > swing / 2.
   const failure = INTERNATIONAL_SIGNING_FAILURE_PROBABILITY
     - (orgStrength === null ? 0 : (orgStrength - 0.5) * INTERNATIONAL_SIGNING_CAPACITY_SWING);
   return { outcome: rng() < failure ? 'unsigned' : 'signed' };
