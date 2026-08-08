@@ -17,6 +17,7 @@ import { maybeEscalateInjury } from './injuries.js';
 import { updateStreakState } from './hotColdStreaks.js';
 import { rollRest, applyShuttleFatigue } from './positionPlayerFatigue.js';
 import { advanceRehabAndRust, applyFullRustOnReturn, advanceRust } from './rehabAssignment.js';
+import { applyClubInfrastructure, clubInfrastructureModifier } from './clubInfrastructure.js';
 import { computeWinPct, updateOwnerPatience, rollFiring, HONEYMOON_PATIENCE, OWNER_PATIENCE_NEUTRAL } from './managerFiring.js';
 import { createManager } from '../models/Manager.js';
 import { generateManager } from '../models/generation/managerGenerator.js';
@@ -129,15 +130,40 @@ function positionPlayersInGame(roster, dhRule) {
 // /box-score matchup builder needs exactly this same "roster -> game side"
 // construction (DH-aware lineup, manager/streak/fatigue wiring), not a
 // second copy of it.
-export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById, rustStatusById = new Map()) {
-  const fieldPlayers = positionPlayersInGame(roster, dhRule);
-  const lineup = dhRule ? fieldPlayers : [...fieldPlayers, startingPitcher];
+// `clubModifier` (§50, club infrastructure) is appended strictly AFTER every
+// existing parameter, per this project's own hard-learned lesson about
+// changing positional signatures — every call site was grepped first. It
+// defaults to 0, which `applyClubInfrastructure` short-circuits, so every
+// pre-§50 caller is byte-identical.
+//
+// Applied HERE rather than at engine/game.js's own form/fatigue sites for a
+// structural reason: bullpen and bench arrive on the side object and every
+// mid-game substitute and reliever is drawn from them, so modifying all four
+// groups once at construction means substitutes inherit their club's
+// modifier automatically. Doing it inside game.js would need the same change
+// at each entry point, and a missed one would silently exempt relievers.
+// It is also applied BEFORE per-game form, fatigue and rust layer on top,
+// which is correct: infrastructure is a standing property of the club, not a
+// reaction to today's state.
+export function buildGameSide(roster, startingPitcher, dhRule, consecutiveGamesPlayedById, managerProfile, streakStateById, rustStatusById = new Map(), clubModifier = 0) {
+  const withClub = (player) => applyClubInfrastructure(player, clubModifier);
+  const rosterForClub = clubModifier
+    ? {
+        ...roster,
+        lineup: roster.lineup.map(withClub),
+        bullpen: (roster.bullpen ?? []).map(withClub),
+        bench: (roster.bench ?? []).map(withClub),
+      }
+    : roster;
+  const starterForClub = withClub(startingPitcher);
+  const fieldPlayers = positionPlayersInGame(rosterForClub, dhRule);
+  const lineup = dhRule ? fieldPlayers : [...fieldPlayers, starterForClub];
   // dhRule/managerProfile/streakStateById all ride along on the side object
   // too — engine/game.js's per-PA decision hooks (bunting's Foundry bonus,
   // managers.md's sliders, the streak-aware pinch-hit factor) need to know
   // which league/manager/recent-form a side carries, same "attach it to the
   // side object" pattern already established for consecutiveGamesPlayedById.
-  return { lineup, startingPitcher, bullpen: roster.bullpen, bench: roster.bench, consecutiveGamesPlayedById, dhRule, managerProfile, streakStateById, rustStatusById };
+  return { lineup, startingPitcher: starterForClub, bullpen: rosterForClub.bullpen, bench: rosterForClub.bench, consecutiveGamesPlayedById, dhRule, managerProfile, streakStateById, rustStatusById };
 }
 
 function isAvailable(player, injuryStatusById) {
@@ -539,6 +565,11 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
     trackSeasonStats = true,
     rotationIndexById = seasonState.rotationIndexById,
     taxiIdsByTeamId = new Map(),
+    // §50 — club infrastructure. An OPTION rather than a new positional
+    // parameter (this function already takes an options bag), and null by
+    // default so every existing caller, including every validate fixture,
+    // gets a 0 modifier and byte-identical behaviour.
+    orgStrengthByTeamId = null,
   } = options;
 
   const teamsById = new Map(teams.map((team) => [team.id, team]));
@@ -610,8 +641,8 @@ export function simulateGamesIntoState(seasonState, teams, getTeamRoster, games,
 
     const box = simulateGame(
       {
-        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById, rustStatusById),
-        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById, rustStatusById),
+        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById, rustStatusById, clubInfrastructureModifier(orgStrengthByTeamId?.get(game.awayTeamId) ?? null)),
+        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById, rustStatusById, clubInfrastructureModifier(orgStrengthByTeamId?.get(game.homeTeamId) ?? null)),
       },
       { rng }
     );

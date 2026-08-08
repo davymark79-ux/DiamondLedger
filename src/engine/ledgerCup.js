@@ -314,7 +314,7 @@ function seriesHomeAway(participantA, participantB) {
  * @param {Map<string, number>} cupRotationIndexById
  * @returns {{homeTeamId: string, awayTeamId: string, gamesToWin: number, games: object[], winner: {seed: number, teamId: string}}}
  */
-export function simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, participantA, participantB, gamesToWin, rng, cupRotationIndexById) {
+export function simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, participantA, participantB, gamesToWin, rng, cupRotationIndexById, orgStrengthByTeamId = null) {
   const { home, away } = seriesHomeAway(participantA, participantB);
   let winsHome = 0;
   let winsAway = 0;
@@ -326,7 +326,7 @@ export function simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, pa
       seasonState, teams, getTeamRoster,
       [{ gameNumber: gameIndex, awayTeamId: away.teamId, homeTeamId: home.teamId }],
       rng,
-      { trackStandings: false, trackManagerLifecycle: false, trackSeasonStats: false, rotationIndexById: cupRotationIndexById }
+      { trackStandings: false, trackManagerLifecycle: false, trackSeasonStats: false, rotationIndexById: cupRotationIndexById, orgStrengthByTeamId }
     );
     games.push(game);
     if (game.awayRuns > game.homeRuns) winsAway++;
@@ -348,11 +348,11 @@ export function simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, pa
  * @param {Map<string, number>} cupRotationIndexById
  * @returns {{series: object[], winners: {seed: number, teamId: string}[]}} winners preserve pairs' order — feed directly into the next round's consecutivePairs()
  */
-export function simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, gamesToWin, rng, cupRotationIndexById) {
+export function simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, gamesToWin, rng, cupRotationIndexById, orgStrengthByTeamId = null) {
   const series = [];
   const winners = [];
   for (const [a, b] of pairs) {
-    const result = simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, a, b, gamesToWin, rng, cupRotationIndexById);
+    const result = simulateCupSeriesIntoState(seasonState, teams, getTeamRoster, a, b, gamesToWin, rng, cupRotationIndexById, orgStrengthByTeamId);
     series.push(result);
     winners.push(result.winner);
   }
@@ -429,7 +429,8 @@ export function simulateSeasonWithCup(
   gamesPerSeason = TARGET_GAMES_PER_TEAM,
   getExpandedTeamRoster = null,
   expansionTriggerWeeksRemaining = null,
-  taxiIdsByTeamId = new Map()
+  taxiIdsByTeamId = new Map(),
+  orgStrengthByTeamId = null
 ) {
   const calendarOptions = {
     ...(cupKnockout ? { firstHalfBlackoutWeeks: 4 } : {}),
@@ -490,6 +491,7 @@ export function simulateSeasonWithCup(
         trackManagerLifecycle: false,
         trackSeasonStats: false,
         rotationIndexById: cupGroupRotationIndexById,
+        orgStrengthByTeamId,
       });
       cupGroupResults.push(...batch);
     } else if (week.kind === 'BLACKOUT' && week.half === 'H1') {
@@ -502,21 +504,21 @@ export function simulateSeasonWithCup(
           { seed: p.seedA, teamId: p.teamIdA },
           { seed: p.seedB, teamId: p.teamIdB },
         ]);
-        playInResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+        playInResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, pairs, KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById, orgStrengthByTeamId);
       } else if (knockoutRoundIndex === 1) {
         const participants = interleaveByesWithPlayInWinners(cupKnockout.byes, playInResult.winners);
-        roundOf16Result = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(participants), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+        roundOf16Result = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(participants), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById, orgStrengthByTeamId);
       } else if (knockoutRoundIndex === 2) {
-        quarterfinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(roundOf16Result.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+        quarterfinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(roundOf16Result.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById, orgStrengthByTeamId);
       } else if (knockoutRoundIndex === 3) {
-        semifinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(quarterfinalResult.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+        semifinalResult = simulateKnockoutRound(seasonState, teams, getTeamRoster, consecutivePairs(quarterfinalResult.winners), KNOCKOUT_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById, orgStrengthByTeamId);
       }
       knockoutRoundIndex++;
     } else if (week.kind === 'ALL_STAR' && cupKnockout) {
       // The single-game Final, the day before the All-Star Game per
       // in-season-tournament.md.
       const [finalA, finalB] = semifinalResult.winners;
-      const result = simulateKnockoutRound(seasonState, teams, getTeamRoster, [[finalA, finalB]], FINAL_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById);
+      const result = simulateKnockoutRound(seasonState, teams, getTeamRoster, [[finalA, finalB]], FINAL_GAMES_TO_WIN, rng, cupKnockoutRotationIndexById, orgStrengthByTeamId);
       finalResult = result.series[0];
     } else if (week.kind === 'OPEN') {
       const weekGames = scheduleByWeek.get(week.index) ?? [];
@@ -525,7 +527,7 @@ export function simulateSeasonWithCup(
       // stage/knockout branches above never reach this branch), and only
       // once expansionTriggerWeekIndex is reached.
       const rosterFn = expansionTriggerWeekIndex != null && week.index >= expansionTriggerWeekIndex ? getExpandedTeamRoster : getTeamRoster;
-      simulateGamesIntoState(seasonState, teams, rosterFn, weekGames, rng, { taxiIdsByTeamId });
+      simulateGamesIntoState(seasonState, teams, rosterFn, weekGames, rng, { taxiIdsByTeamId, orgStrengthByTeamId });
     }
   }
 

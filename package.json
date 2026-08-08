@@ -41,7 +41,8 @@
     "validate:rights": "node scripts/validate-player-rights.mjs",
     "validate:rehab": "node scripts/validate-rehab.mjs",
     "validate:awards": "node scripts/validate-awards.mjs",
-    "validate:clubs": "node scripts/validate-clubs.mjs"
+    "validate:clubs": "node scripts/validate-clubs.mjs",
+    "validate:infra": "node scripts/validate-club-infrastructure.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

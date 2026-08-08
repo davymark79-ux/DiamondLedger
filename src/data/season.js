@@ -86,9 +86,13 @@ const WRITERS_CORPS_SEED = 20260501;
 /**
  * §49 — each club's economic strength as a 0-1 position within the league's
  * payroll-capacity range (0 = poorest, 1 = richest). Defined ONCE here and
- * fed to both differentiation channels — affiliate development
- * (engine/affiliateDevelopment.js) and free agency (engine/freeAgency.js) —
- * so "how strong is this club" can never drift into two formulas.
+ * fed to every differentiation channel — affiliate development
+ * (engine/affiliateDevelopment.js), draft signing conversion
+ * (engine/college.js), international signing
+ * (engine/internationalAcademy.js), free agency (engine/freeAgency.js) and,
+ * since §50, club infrastructure in the game loop itself
+ * (engine/clubInfrastructure.js, via engine/season.js's buildGameSide) —
+ * so "how strong is this club" can never drift into competing formulas.
  */
 function buildOrgStrengthByTeamId(teamsForSeason) {
   const capacities = teamsForSeason.map((t) => computeClubPayrollCapacity(t));
@@ -450,7 +454,8 @@ export function computeFreshSeason1State() {
     undefined,
     getExpandedTeamRoster,
     EXPANSION_TRIGGER_WEEKS_REMAINING,
-    taxiIdsByTeamId
+    taxiIdsByTeamId,
+    ORG_STRENGTH_BY_TEAM_ID
   );
   // Regular-season fold — a pure post-hoc pass over this season's own
   // already-complete results array (see engine/tournamentQuotient.js's
@@ -471,7 +476,8 @@ export function computeFreshSeason1State() {
     seasonResult.injuryStatusById,
     seasonResult.consecutiveGamesPlayedById,
     seasonResult.streakStateById,
-    rng
+    rng,
+    ORG_STRENGTH_BY_TEAM_ID
   );
   // Playoff fold — covers every series: both leagues' WC Round + LCS, the
   // Finals, and the MLB2 Championship (all at K_CONTEXT.LEAGUE_PLAYOFFS).
@@ -702,7 +708,8 @@ export function advanceToNextSeason(state) {
     undefined,
     getExpandedTeamRoster,
     EXPANSION_TRIGGER_WEEKS_REMAINING,
-    taxiIdsByTeamId
+    taxiIdsByTeamId,
+    ORG_STRENGTH_BY_TEAM_ID
   );
   quotientByTeamId = foldRegularSeasonResults(quotientByTeamId, seasonResult.results);
   // Cup group-stage games fold in too, at their own (higher) K_CONTEXT —
@@ -761,7 +768,8 @@ export function advanceToNextSeason(state) {
     seasonResult.injuryStatusById,
     seasonResult.consecutiveGamesPlayedById,
     seasonResult.streakStateById,
-    rng
+    rng,
+    ORG_STRENGTH_BY_TEAM_ID
   );
   quotientByTeamId = foldPlayoffResult(quotientByTeamId, playoffResult);
 

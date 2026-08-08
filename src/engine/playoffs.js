@@ -19,6 +19,7 @@
 // Finals/LCS format (reuses the same series helper, no extra code).
 
 import { resolveAvailableRoster, resolveRestedRoster, buildGameSide } from './season.js';
+import { clubInfrastructureModifier } from './clubInfrastructure.js';
 import { simulateGame } from './game.js';
 import { computeWinPct } from './managerFiring.js';
 import { LEAGUE_IDS, TIERS, LEAGUES } from '../models/constants.js';
@@ -121,7 +122,7 @@ function recordNewInjuries(injuryStatusById, box, seriesGameNumber) {
  * @param {() => number} rng
  * @returns {{teamAId: string, teamBId: string, gamesToWin: number, games: object[], winnerTeamId: string}}
  */
-export function simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng) {
+export function simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng, orgStrengthByTeamId = null) {
   const homePattern = HOME_PATTERN_BY_GAMES_TO_WIN[gamesToWin];
   const workingInjuryStatusById = new Map(injuryStatusById);
   let winsA = 0;
@@ -147,8 +148,12 @@ export function simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, m
 
     const box = simulateGame(
       {
-        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById),
-        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById),
+        // §50 — a club's infrastructure edge does not evaporate in October.
+        // `rustStatusById` is passed as its own default here (this path has
+        // never tracked rust — see the header's scoped-to-itself note) purely
+        // so `clubModifier` lands in the right positional slot.
+        home: buildGameSide(homeRoster, homeStarter, dhRule, consecutiveGamesPlayedById, homeManager, streakStateById, new Map(), clubInfrastructureModifier(orgStrengthByTeamId?.get(homeTeam.id) ?? null)),
+        away: buildGameSide(awayRoster, awayStarter, dhRule, consecutiveGamesPlayedById, awayManager, streakStateById, new Map(), clubInfrastructureModifier(orgStrengthByTeamId?.get(awayTeam.id) ?? null)),
       },
       { rng }
     );
@@ -194,10 +199,10 @@ export function simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, m
  * @param {Map<string, object>} streakStateById
  * @param {() => number} rng
  */
-export function simulatePlayoffs(teams, standingsById, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng) {
+export function simulatePlayoffs(teams, standingsById, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng, orgStrengthByTeamId = null) {
   const teamsById = new Map(teams.map((t) => [t.id, t]));
   const series = (teamA, teamB, gamesToWin) =>
-    simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng);
+    simulateBestOfSeries(teamA, teamB, gamesToWin, rosterByTeamId, managerByTeamId, injuryStatusById, consecutiveGamesPlayedById, streakStateById, rng, orgStrengthByTeamId);
 
   const leagues = {};
   const pennantWinnerByLeagueId = {};
